@@ -8,7 +8,7 @@ import Header from './components/Header';
 import LibraryPage from './components/LibraryPage';
 import Login from './components/Login';
 import RequireAuth from './components/RequireAuth';
-import { Platform, Post } from './types';
+import { Platform, Post, RateInfo, StoriesStatus } from './types';
 import { ApiError, fetchFeed } from './utils/api';
 
 interface FeedState {
@@ -16,9 +16,29 @@ interface FeedState {
   posts: Post[];
   cached: boolean;
   errorMessage: string | null;
+  nextCursor: string | null;
+  storiesStatus: StoriesStatus;
+  rate: RateInfo | null;
+  isLoadingMore: boolean;
+  loadMoreError: string | null;
 }
 
-const IDLE_FEED: FeedState = { status: 'idle', posts: [], cached: false, errorMessage: null };
+const IDLE_FEED: FeedState = {
+  status: 'idle',
+  posts: [],
+  cached: false,
+  errorMessage: null,
+  nextCursor: null,
+  storiesStatus: 'none',
+  rate: null,
+  isLoadingMore: false,
+  loadMoreError: null,
+};
+
+const describeError = (error: unknown): string =>
+  error instanceof ApiError
+    ? error.message
+    : 'Backend tidak bisa dihubungi. Pastikan service backend sudah jalan.';
 
 function App() {
   const [username, setUsername] = useState('');
@@ -43,21 +63,52 @@ function App() {
           refresh,
           signal: controller.signal,
         });
-        setFeed({ status: 'success', posts: data.posts, cached: data.cached, errorMessage: null });
+        setFeed({
+          ...IDLE_FEED,
+          status: 'success',
+          posts: data.posts,
+          cached: data.cached,
+          nextCursor: data.nextCursor,
+          storiesStatus: data.storiesStatus,
+          rate: data.rate,
+        });
       } catch (error) {
         if (controller.signal.aborted) {
           return;
         }
         console.error('fetchFeed failed', error);
-        const message =
-          error instanceof ApiError
-            ? error.message
-            : 'Backend tidak bisa dihubungi. Pastikan service backend sudah jalan.';
-        setFeed({ status: 'error', posts: [], cached: false, errorMessage: message });
+        setFeed({ ...IDLE_FEED, status: 'error', errorMessage: describeError(error) });
       }
     },
     [],
   );
+
+  const loadMore = useCallback(async () => {
+    const cursor = feed.nextCursor;
+    if (!cursor || feed.isLoadingMore) return;
+    setFeed((previous) => ({ ...previous, isLoadingMore: true, loadMoreError: null }));
+    try {
+      const data = await fetchFeed(platform, username, { cursor });
+      setFeed((previous) => {
+        // Skip ids already shown: TikTok windows can overlap at the edges.
+        const seen = new Set(previous.posts.map((post) => post.id));
+        return {
+          ...previous,
+          posts: [...previous.posts, ...data.posts.filter((post) => !seen.has(post.id))],
+          nextCursor: data.nextCursor,
+          rate: data.rate,
+          isLoadingMore: false,
+        };
+      });
+    } catch (error) {
+      console.error('load more failed', error);
+      setFeed((previous) => ({
+        ...previous,
+        isLoadingMore: false,
+        loadMoreError: describeError(error),
+      }));
+    }
+  }, [feed.nextCursor, feed.isLoadingMore, platform, username]);
 
   useEffect(() => {
     void loadFeed(platform, username);
@@ -115,7 +166,13 @@ function App() {
                       username={username}
                       errorMessage={feed.errorMessage}
                       cached={feed.cached}
+                      storiesStatus={feed.storiesStatus}
+                      rate={feed.rate}
+                      hasMore={feed.nextCursor !== null}
+                      isLoadingMore={feed.isLoadingMore}
+                      loadMoreError={feed.loadMoreError}
                       onRetry={() => void loadFeed(platform, username)}
+                      onLoadMore={() => void loadMore()}
                     />
                   </>
                 }

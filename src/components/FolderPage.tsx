@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Play } from 'lucide-react';
-import { Folder, MediaItem, MediaType } from '../types';
+import { Folder, MediaItem, MediaSource, MediaType } from '../types';
 import {
   ApiError,
   deleteFolder,
@@ -11,13 +11,21 @@ import {
   formatBytes,
 } from '../utils/api';
 import MediaViewer from './MediaViewer';
+import TabBar from './TabBar';
 import UploadDialog from './UploadDialog';
 import { ConfirmDelete, Panel, focusRing, primaryButton, secondaryButton } from './ui';
 
-const TABS: { type: MediaType; label: string }[] = [
-  { type: 'photo', label: 'Foto' },
-  { type: 'video', label: 'Video' },
-];
+const SOURCE_LABELS: Record<MediaSource, string> = {
+  post: 'Post',
+  story: 'Story',
+  upload: 'Upload',
+};
+const TYPE_LABELS: Record<MediaType, string> = { photo: 'Foto', video: 'Video' };
+const SOURCES: MediaSource[] = ['post', 'story', 'upload'];
+const TYPES: MediaType[] = ['photo', 'video'];
+
+const parseSource = (value: string | null): MediaSource =>
+  value === 'story' || value === 'upload' ? value : 'post';
 
 type ItemsState =
   | { status: 'loading' }
@@ -32,12 +40,12 @@ const FolderPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab: MediaType = searchParams.get('tab') === 'video' ? 'video' : 'photo';
+  const activeSource = parseSource(searchParams.get('source'));
   const [folder, setFolder] = useState<Folder | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [items, setItems] = useState<ItemsState>({ status: 'loading' });
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const loadFolder = useCallback(() => {
     fetchFolder(folderId)
@@ -53,29 +61,23 @@ const FolderPage: React.FC = () => {
 
   const loadItems = useCallback(() => {
     setItems({ status: 'loading' });
-    fetchFolderItems(folderId, activeTab)
+    fetchFolderItems(folderId, activeTab, activeSource)
       .then((data) => setItems({ status: 'ready', items: data }))
       .catch((caught: unknown) => {
         console.error('fetchFolderItems failed', caught);
         setItems({ status: 'error', message: errorMessage(caught, 'Gagal memuat file') });
       });
-  }, [folderId, activeTab]);
+  }, [folderId, activeTab, activeSource]);
 
   useEffect(loadFolder, [loadFolder]);
   useEffect(loadItems, [loadItems]);
 
-  const selectTab = (type: MediaType) => {
+  const updateParams = (source: MediaSource, type: MediaType) => {
     setViewerIndex(null);
-    setSearchParams(type === 'photo' ? {} : { tab: type }, { replace: true });
-  };
-
-  const handleTabKey = (event: React.KeyboardEvent, index: number) => {
-    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') {
-      return;
-    }
-    const next = (index + (event.key === 'ArrowRight' ? 1 : -1) + TABS.length) % TABS.length;
-    selectTab(TABS[next].type);
-    tabRefs.current[next]?.focus();
+    const params: Record<string, string> = {};
+    if (source !== 'post') params.source = source;
+    if (type !== 'photo') params.tab = type;
+    setSearchParams(params, { replace: true });
   };
 
   const handleDeleteItem = async (item: MediaItem) => {
@@ -134,36 +136,35 @@ const FolderPage: React.FC = () => {
         )}
       </div>
 
-      <div role="tablist" aria-label="Jenis file" className="mb-4 flex border-b border-gray-300">
-        {TABS.map((tab, index) => {
-          const count = folder ? (tab.type === 'photo' ? folder.photoCount : folder.videoCount) : null;
-          const isActive = tab.type === activeTab;
-          return (
-            <button
-              key={tab.type}
-              ref={(element) => {
-                tabRefs.current[index] = element;
-              }}
-              type="button"
-              role="tab"
-              id={`tab-${tab.type}`}
-              aria-selected={isActive}
-              aria-controls="folder-tabpanel"
-              tabIndex={isActive ? 0 : -1}
-              onClick={() => selectTab(tab.type)}
-              onKeyDown={(event) => handleTabKey(event, index)}
-              className={`-mb-px min-h-[44px] px-5 text-sm font-semibold border-b-2 ${focusRing} ${
-                isActive ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-700 hover:text-gray-900'
-              }`}
-            >
-              {tab.label}
-              {count !== null && <span className="ml-1 font-normal">({count})</span>}
-            </button>
-          );
-        })}
+      <TabBar
+        label="Sumber file"
+        idPrefix="source"
+        panelId="folder-tabpanel"
+        active={activeSource}
+        onSelect={(source) => updateParams(source, activeTab)}
+        options={SOURCES.map((source) => ({
+          value: source,
+          label: SOURCE_LABELS[source],
+          count: folder ? folder.counts[source].photo + folder.counts[source].video : undefined,
+        }))}
+      />
+      <div className="mt-3 mb-4">
+        <TabBar
+          label="Jenis file"
+          idPrefix="type"
+          panelId="folder-tabpanel"
+          size="small"
+          active={activeTab}
+          onSelect={(type) => updateParams(activeSource, type)}
+          options={TYPES.map((type) => ({
+            value: type,
+            label: TYPE_LABELS[type],
+            count: folder ? folder.counts[activeSource][type] : undefined,
+          }))}
+        />
       </div>
 
-      <div id="folder-tabpanel" role="tabpanel" aria-labelledby={`tab-${activeTab}`}>
+      <div id="folder-tabpanel" role="tabpanel" aria-labelledby={`source-${activeSource} type-${activeTab}`}>
         {items.status === 'loading' && (
           <Panel role="status">
             <p>Memuat file...</p>
@@ -179,7 +180,10 @@ const FolderPage: React.FC = () => {
         )}
         {items.status === 'ready' && readyItems.length === 0 && (
           <Panel>
-            <p>Belum ada {activeTab === 'photo' ? 'foto' : 'video'} di folder ini.</p>
+            <p>
+              Belum ada {TYPE_LABELS[activeTab].toLowerCase()} dari {SOURCE_LABELS[activeSource].toLowerCase()} di
+              folder ini.
+            </p>
           </Panel>
         )}
         {readyItems.length > 0 && (

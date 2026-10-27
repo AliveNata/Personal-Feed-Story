@@ -1,5 +1,21 @@
 export type Platform = 'instagram' | 'tiktok';
 
+export interface MediaSlide {
+  type: 'photo' | 'video';
+  url: string;
+  posterUrl: string | null;
+}
+
+export type StoriesStatus = 'available' | 'none' | 'login_required' | 'not_supported';
+
+export interface RateInfo {
+  used: number;
+  limit: number;
+  windowSeconds: number;
+  waitSeconds: number;
+  nearLimit: boolean;
+}
+
 export interface Post {
   id: string;
   imageUrl: string;
@@ -11,6 +27,7 @@ export interface Post {
   createdAt: string;
   isStory: boolean;
   permalink: string | null;
+  media: MediaSlide[];
 }
 
 export interface FeedResponse {
@@ -18,6 +35,27 @@ export interface FeedResponse {
   username: string;
   posts: Post[];
   cached: boolean;
+  nextCursor: string | null;
+  storiesStatus: StoriesStatus;
+  rate: RateInfo | null;
+}
+
+export interface Highlight {
+  id: string;
+  title: string;
+  coverUrl: string;
+  itemCount: number | null;
+}
+
+export interface HighlightsResponse {
+  status: 'available' | 'none' | 'login_required';
+  highlights: Highlight[];
+  rate: RateInfo | null;
+}
+
+export interface HighlightItemsResponse {
+  items: Post[];
+  rate: RateInfo | null;
 }
 
 export interface User {
@@ -39,6 +77,8 @@ export interface DownloadJob {
   errors: { postId: string; message: string }[];
 }
 
+export type MediaSource = 'post' | 'story' | 'upload';
+
 export interface Folder {
   id: number;
   name: string;
@@ -46,6 +86,7 @@ export interface Folder {
   videoCount: number;
   sizeBytes: number;
   createdAt: string;
+  counts: Record<MediaSource, Record<MediaType, number>>;
 }
 
 export interface MediaItem {

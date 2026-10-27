@@ -6,6 +6,11 @@ Feed viewer for TikTok and Instagram accounts, with a private download library. 
 - After login (one account, created from the CLI) you can tick posts and stories, download them into a named folder, and browse the folder with Photo and Video tabs. Folders and single files can be deleted.
 - Posts already in any folder are greyed out in the feed and cannot be ticked again.
 - "Tambah file" uploads your own photos and videos into a folder (drag and drop or file picker). The tab is picked from the file extension.
+- Feed cards are carousels (all slides of an Instagram carousel or a TikTok slideshow) with arrows, dots and autoplay that pauses on hover, focus, video playback and off screen.
+- "Muat lebih banyak" loads older posts. Instagram pages by cursor, TikTok by 30 day windows back to one year.
+- Instagram highlights load on demand. Story and highlight items share ids, so a downloaded item is greyed out wherever it shows up.
+- Folders have Post, Story and Upload tabs, each split into Foto and Video.
+- A request budget per platform (`INSTAGRAM_RATE_BUDGET`, `TIKTOK_RATE_BUDGET`, default 100 and 150 requests per 15 minutes) warns in the UI when close to the limit and refuses with "tunggu sekitar N menit" when used up or after a real 429. These numbers are our own conservative guesses.
 
 ## Architecture
 

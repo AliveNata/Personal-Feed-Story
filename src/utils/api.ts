@@ -2,7 +2,10 @@ import {
   DownloadJob,
   FeedResponse,
   Folder,
+  HighlightItemsResponse,
+  HighlightsResponse,
   MediaItem,
+  MediaSource,
   MediaType,
   Platform,
   User,
@@ -12,14 +15,24 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    // Seconds the backend asks us to wait, set on 429 rate limit answers.
+    public readonly retryAfter: number | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
   }
 }
 
-const errorDetail = async (response: Response): Promise<string> => {
+const toApiError = async (response: Response): Promise<ApiError> => {
   const body: unknown = await response.json().catch(() => null);
+  const retryAfter =
+    body && typeof body === 'object' && 'retryAfter' in body && typeof body.retryAfter === 'number'
+      ? body.retryAfter
+      : null;
+  return new ApiError(errorDetail(body, response.status), response.status, retryAfter);
+};
+
+const errorDetail = (body: unknown, status: number): string => {
   if (body && typeof body === 'object' && 'detail' in body) {
     const { detail } = body as { detail: unknown };
     if (typeof detail === 'string') {
@@ -31,9 +44,9 @@ const errorDetail = async (response: Response): Promise<string> => {
     }
   }
   // Vite's proxy answers an empty 500 when the backend is down, so cover both cases.
-  return response.status === 500
+  return status === 500
     ? 'Backend mati atau error. Cek terminal docker compose up.'
-    : `Request gagal (${response.status})`;
+    : `Request gagal (${status})`;
 };
 
 const request = async <T>(
@@ -48,7 +61,7 @@ const request = async <T>(
     credentials: 'same-origin',
   });
   if (!response.ok) {
-    throw new ApiError(await errorDetail(response), response.status);
+    throw await toApiError(response);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -59,11 +72,14 @@ const request = async <T>(
 export const fetchFeed = (
   platform: Platform,
   username: string,
-  options: { refresh?: boolean; signal?: AbortSignal } = {},
+  options: { refresh?: boolean; cursor?: string | null; signal?: AbortSignal } = {},
 ): Promise<FeedResponse> => {
   const params = new URLSearchParams({ platform, username });
   if (options.refresh) {
     params.set('refresh', 'true');
+  }
+  if (options.cursor) {
+    params.set('cursor', options.cursor);
   }
   return request<FeedResponse>(`/api/feed?${params.toString()}`, { signal: options.signal });
 };
@@ -91,8 +107,25 @@ export const fetchFolders = (): Promise<Folder[]> => request<Folder[]>('/api/fol
 export const fetchFolder = (folderId: number): Promise<Folder> =>
   request<Folder>(`/api/folders/${folderId}`);
 
-export const fetchFolderItems = (folderId: number, type: MediaType): Promise<MediaItem[]> =>
-  request<MediaItem[]>(`/api/folders/${folderId}/items?type=${type}`);
+export const fetchFolderItems = (
+  folderId: number,
+  type: MediaType,
+  source: MediaSource,
+): Promise<MediaItem[]> =>
+  request<MediaItem[]>(`/api/folders/${folderId}/items?type=${type}&source=${source}`);
+
+export const fetchHighlights = (username: string): Promise<HighlightsResponse> =>
+  request<HighlightsResponse>(
+    `/api/instagram/highlights?username=${encodeURIComponent(username)}`,
+  );
+
+export const fetchHighlightItems = (
+  username: string,
+  highlightId: string,
+): Promise<HighlightItemsResponse> =>
+  request<HighlightItemsResponse>(
+    `/api/instagram/highlights/${encodeURIComponent(highlightId)}?username=${encodeURIComponent(username)}`,
+  );
 
 export const deleteFolder = (folderId: number): Promise<void> =>
   request<void>(`/api/folders/${folderId}`, { method: 'DELETE' });
