@@ -1,6 +1,8 @@
 """TikTok feed via the DouK-Downloader Web API (JoeanAmier/TikTokDownloader)."""
 
+import asyncio
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -8,9 +10,15 @@ import httpx
 
 from app.errors import PrivateAccountError, UpstreamError, UserNotFoundError
 from app.library.types import ResolvedPost
-from app.models import Post, proxied_media_url
+from app.models import FeedPage, MediaSlide, Post, proxied_media_url
+from app.ratelimit import RateBudget
 
 logger = logging.getLogger(__name__)
+
+PLATFORM = "tiktok"
+# Load more walks back in windows of lookback_days, up to a year.
+MAX_HISTORY_DAYS = 365
+VIDEO_URL_HINT = re.compile(r"video|\.mp4|mime_type=video", re.IGNORECASE)
 
 # Every TikTok secUid starts with this base64 prefix, so we can skip the lookup.
 SEC_UID_PREFIX = "MS4wLjABAAAA"
@@ -18,6 +26,30 @@ BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 )
+
+
+def douk_slides(item: dict[str, Any]) -> list[MediaSlide]:
+    cover = str(item.get("static_cover") or "")
+    downloads = item.get("downloads")
+    if isinstance(downloads, str) and downloads:
+        return [
+            MediaSlide(
+                type="video",
+                url=proxied_media_url(downloads),
+                poster_url=proxied_media_url(cover) or None,
+            )
+        ]
+    if isinstance(downloads, list):
+        # Slideshows are photos, "live" slides are short clips: tell them apart by URL.
+        return [
+            MediaSlide(
+                type="video" if VIDEO_URL_HINT.search(str(url)) else "photo",
+                url=proxied_media_url(str(url)),
+            )
+            for url in downloads
+            if url
+        ]
+    return []
 
 
 def map_douk_item(item: dict[str, Any]) -> Post:
@@ -39,6 +71,7 @@ def map_douk_item(item: dict[str, Any]) -> Post:
         created_at=datetime.fromtimestamp(timestamp, tz=UTC),
         is_story=False,
         permalink=item.get("share_url") or None,
+        media=douk_slides(item),
     )
 
 
@@ -67,8 +100,10 @@ class TikTokSource:
         douk_base_url: str,
         cookie: str,
         lookback_days: int,
+        budget: RateBudget | None = None,
     ) -> None:
         self._http = http_client
+        self._budget = budget
         self._douk_base_url = douk_base_url.rstrip("/")
         self._cookie = cookie
         self._lookback_days = lookback_days
@@ -76,6 +111,9 @@ class TikTokSource:
         self._sec_uid_cache: dict[str, str] = {}
 
     async def _post_douk(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if self._budget is not None:
+            await asyncio.to_thread(self._budget.ensure_available, PLATFORM)
+            self._budget.record(PLATFORM)
         try:
             response = await self._http.post(f"{self._douk_base_url}{path}", json=payload)
             response.raise_for_status()
@@ -111,30 +149,39 @@ class TikTokSource:
         self._sec_uid_cache[cache_key] = str(sec_uid)
         return str(sec_uid)
 
-    async def fetch(self, username: str, limit: int) -> list[Post]:
+    async def fetch_page(self, username: str, cursor: str | None) -> FeedPage:
+        """One page = posts from one lookback window. Cursor is the window index, 0 = newest."""
+        window = int(cursor) if cursor and cursor.isdigit() else 0
         sec_uid = await self.resolve_sec_uid(username)
-        payload = {
+        payload: dict[str, Any] = {
             "sec_user_id": sec_uid,
             "tab": "post",
+            # DouK counts "earliest" back from "latest", both in days.
             "earliest": self._lookback_days,
-            "count": min(limit, 35),
+            "latest": window * self._lookback_days,
+            "count": 35,
             "cookie": self._cookie,
             "source": False,
         }
         body = await self._post_douk("/tiktok/account", payload)
         data = body.get("data")
+        older_exists = (window + 1) * self._lookback_days < MAX_HISTORY_DAYS
+        next_cursor = str(window + 1) if older_exists else None
+
         if data is None:
             # DouK collapses "private", "no posts in range" and "blocked" into data=null.
             logger.warning("douk returned no data for %s: %s", username, body.get("message"))
-            raise PrivateAccountError(
-                "Tidak ada data. Akun mungkin private, belum posting dalam "
-                f"{self._lookback_days} hari terakhir, atau cookie TikTok kedaluwarsa"
-            )
+            if window == 0:
+                raise PrivateAccountError(
+                    "Tidak ada data. Akun mungkin private, belum posting dalam "
+                    f"{self._lookback_days} hari terakhir, atau cookie TikTok kedaluwarsa"
+                )
+            return FeedPage(posts=[], next_cursor=next_cursor, stories_status="not_supported")
 
         items = data if isinstance(data, list) else [data]
         posts = [map_douk_item(item) for item in items if item.get("id")]
         posts.sort(key=lambda post: post.created_at, reverse=True)
-        return posts[:limit]
+        return FeedPage(posts=posts, next_cursor=next_cursor, stories_status="not_supported")
 
     async def resolve_media(self, username: str, post_id: str) -> ResolvedPost:
         body = await self._post_douk(

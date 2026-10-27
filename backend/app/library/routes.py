@@ -61,6 +61,17 @@ class JobResponse(CamelModel):
     errors: list[dict[str, Any]]
 
 
+class MediaCounts(CamelModel):
+    photo: int
+    video: int
+
+
+class SourceCounts(CamelModel):
+    post: MediaCounts
+    story: MediaCounts
+    upload: MediaCounts
+
+
 class FolderResponse(CamelModel):
     id: int
     name: str
@@ -68,6 +79,7 @@ class FolderResponse(CamelModel):
     video_count: int
     size_bytes: int
     created_at: datetime
+    counts: SourceCounts
 
 
 class MediaItemResponse(CamelModel):
@@ -98,6 +110,7 @@ def _folder_response(summary: service.FolderSummary) -> FolderResponse:
         video_count=summary.video_count,
         size_bytes=summary.size_bytes,
         created_at=summary.folder.created_at,
+        counts=SourceCounts.model_validate(summary.counts),
     )
 
 
@@ -162,11 +175,15 @@ async def get_folder(folder_id: int, db: DbSession) -> FolderResponse:
 
 @router.get("/folders/{folder_id}/items", response_model=list[MediaItemResponse])
 async def list_items(
-    folder_id: int, db: DbSession, type: Literal["photo", "video"] = "photo"
+    folder_id: int,
+    db: DbSession,
+    type: Literal["photo", "video"] = "photo",
+    source: Literal["post", "story", "upload"] | None = None,
 ) -> list[MediaItemResponse]:
     if await db.get(Folder, folder_id) is None:
         raise HTTPException(status_code=404, detail="Folder tidak ditemukan")
-    return [_item_response(item) for item in await service.list_media(db, folder_id, type)]
+    items = await service.list_media(db, folder_id, type, source)
+    return [_item_response(item) for item in items]
 
 
 @router.delete("/folders/{folder_id}", status_code=204)

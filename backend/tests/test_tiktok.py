@@ -46,6 +46,7 @@ def test_map_douk_item_maps_video_fields() -> None:
     assert post.created_at == datetime.fromtimestamp(1_761_500_000, tz=UTC)
     assert post.image_url.startswith("/api/media?url=https%3A%2F%2Fp16-sign.tiktokcdn.com")
     assert post.is_story is False
+    assert [(slide.type, slide.poster_url is not None) for slide in post.media] == [("video", True)]
 
 
 def test_map_douk_item_uses_first_slide_when_no_cover() -> None:
@@ -60,6 +61,7 @@ def test_map_douk_item_uses_first_slide_when_no_cover() -> None:
 
     # Assert
     assert "slide1.jpeg" in post.image_url
+    assert [slide.type for slide in post.media] == ["photo", "photo"]
 
 
 def test_map_douk_item_clamps_missing_stats_to_zero() -> None:
@@ -120,7 +122,7 @@ async def test_resolve_sec_uid_raises_not_found_when_douk_has_no_user() -> None:
 
 
 @respx.mock
-async def test_fetch_sends_bounded_request_and_sorts_newest_first() -> None:
+async def test_fetch_page_requests_one_window_and_sorts_newest_first() -> None:
     # Arrange
     older = douk_item(id="1", create_timestamp=1_700_000_000)
     newer = douk_item(id="2", create_timestamp=1_760_000_000)
@@ -130,15 +132,33 @@ async def test_fetch_sends_bounded_request_and_sorts_newest_first() -> None:
 
     async with httpx.AsyncClient() as client:
         # Act
-        posts = await make_source(client).fetch(SEC_UID, limit=1)
+        page = await make_source(client).fetch_page(SEC_UID, "2")
 
     # Assert
     sent = route.calls.last.request
     body = httpx.Response(200, content=sent.content).json()
     assert body["sec_user_id"] == SEC_UID
-    assert body["earliest"] == 30
+    assert (body["earliest"], body["latest"]) == (30, 60)
     assert body["cookie"] == "sid=x"
-    assert [post.id for post in posts] == ["2"]
+    assert [post.id for post in page.posts] == ["2", "1"]
+    assert page.next_cursor == "3"
+    assert page.stories_status == "not_supported"
+
+
+@respx.mock
+async def test_fetch_page_beyond_first_window_returns_empty_page_on_no_data() -> None:
+    # Arrange
+    respx.post(f"{DOUK_URL}/tiktok/account").respond(
+        200, json={"message": "failed", "data": None, "params": {}}
+    )
+
+    async with httpx.AsyncClient() as client:
+        # Act
+        page = await make_source(client).fetch_page(SEC_UID, "12")
+
+    # Assert
+    assert page.posts == []
+    assert page.next_cursor is None
 
 
 @respx.mock
@@ -151,7 +171,7 @@ async def test_fetch_raises_private_when_douk_returns_no_data() -> None:
     async with httpx.AsyncClient() as client:
         # Act / Assert
         with pytest.raises(PrivateAccountError):
-            await make_source(client).fetch(SEC_UID, limit=5)
+            await make_source(client).fetch_page(SEC_UID, None)
 
 
 @respx.mock
@@ -162,4 +182,4 @@ async def test_fetch_raises_upstream_when_douk_is_down() -> None:
     async with httpx.AsyncClient() as client:
         # Act / Assert
         with pytest.raises(UpstreamError):
-            await make_source(client).fetch(SEC_UID, limit=5)
+            await make_source(client).fetch_page(SEC_UID, None)

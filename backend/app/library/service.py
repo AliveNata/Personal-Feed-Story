@@ -2,8 +2,9 @@
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import case, delete, func, select
 from sqlalchemy.exc import IntegrityError
@@ -15,12 +16,26 @@ from app.library.storage import DownloadedFile, LibraryStorage
 logger = logging.getLogger(__name__)
 
 
+SOURCES = ("post", "story", "upload")
+
+
+def source_expression() -> Any:
+    """Where an item came from, derived from existing columns: no extra column to keep in sync."""
+    return case(
+        (MediaItem.platform == "upload", "upload"),
+        (MediaItem.is_story.is_(True), "story"),
+        else_="post",
+    )
+
+
 @dataclass(frozen=True)
 class FolderSummary:
     folder: Folder
     photo_count: int
     video_count: int
     size_bytes: int
+    # counts[source][media_type], e.g. counts["story"]["video"]
+    counts: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -132,7 +147,25 @@ async def list_folders(db: AsyncSession) -> list[FolderSummary]:
         .group_by(Folder.id)
         .order_by(Folder.created_at.desc())
     )
-    return [FolderSummary(f, int(p), int(v), int(s)) for f, p, v, s in rows.all()]
+    folders = rows.all()
+
+    source = source_expression()
+    count_rows = await db.execute(
+        select(MediaItem.folder_id, source, MediaItem.media_type, func.count()).group_by(
+            MediaItem.folder_id, source, MediaItem.media_type
+        )
+    )
+    counts: dict[int, dict[str, dict[str, int]]] = {}
+    for folder_id, item_source, media_type, count in count_rows.all():
+        per_folder = counts.setdefault(
+            folder_id, {name: {"photo": 0, "video": 0} for name in SOURCES}
+        )
+        per_folder[item_source][media_type] = int(count)
+
+    empty = {name: {"photo": 0, "video": 0} for name in SOURCES}
+    return [
+        FolderSummary(f, int(p), int(v), int(s), counts.get(f.id, empty)) for f, p, v, s in folders
+    ]
 
 
 async def get_folder_summary(db: AsyncSession, folder_id: int) -> FolderSummary | None:
@@ -140,10 +173,15 @@ async def get_folder_summary(db: AsyncSession, folder_id: int) -> FolderSummary 
     return summaries[0] if summaries else None
 
 
-async def list_media(db: AsyncSession, folder_id: int, media_type: str) -> list[MediaItem]:
+async def list_media(
+    db: AsyncSession, folder_id: int, media_type: str, source: str | None = None
+) -> list[MediaItem]:
+    conditions = [MediaItem.folder_id == folder_id, MediaItem.media_type == media_type]
+    if source is not None:
+        conditions.append(source_expression() == source)
     result = await db.scalars(
         select(MediaItem)
-        .where(MediaItem.folder_id == folder_id, MediaItem.media_type == media_type)
+        .where(*conditions)
         .order_by(MediaItem.posted_at.desc().nulls_last(), MediaItem.item_index)
     )
     return list(result.all())

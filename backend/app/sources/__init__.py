@@ -1,7 +1,7 @@
 from typing import Protocol
 
-from app.models import Post
+from app.models import FeedPage
 
 
 class FeedSource(Protocol):
-    async def fetch(self, username: str, limit: int) -> list[Post]: ...
+    async def fetch_page(self, username: str, cursor: str | None) -> FeedPage: ...

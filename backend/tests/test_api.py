@@ -5,9 +5,9 @@ import httpx
 import pytest
 
 from app.errors import UserNotFoundError
-from app.main import app, get_cache, get_http_client, get_sources
+from app.main import app, get_budget, get_cache, get_media_session, get_sources
 from app.media import is_allowed_media_url
-from app.models import Post
+from app.models import FeedPage, Post
 
 
 def sample_post(post_id: str = "1") -> Post:
@@ -27,24 +27,24 @@ class FakeSource:
     def __init__(self, posts: list[Post] | None = None, error: Exception | None = None) -> None:
         self.posts = posts or []
         self.error = error
-        self.calls: list[tuple[str, int]] = []
+        self.calls: list[tuple[str, str | None]] = []
 
-    async def fetch(self, username: str, limit: int) -> list[Post]:
-        self.calls.append((username, limit))
+    async def fetch_page(self, username: str, cursor: str | None) -> FeedPage:
+        self.calls.append((username, cursor))
         if self.error is not None:
             raise self.error
-        return self.posts
+        return FeedPage(posts=self.posts, next_cursor="next1", stories_status="none")
 
 
 class FakeCache:
     def __init__(self) -> None:
-        self.store: dict[str, list[Post]] = {}
+        self.store: dict[str, FeedPage] = {}
 
-    async def get(self, key: str) -> list[Post] | None:
+    async def get(self, key: str) -> FeedPage | None:
         return self.store.get(key)
 
-    async def set(self, key: str, posts: list[Post]) -> None:
-        self.store[key] = posts
+    async def set(self, key: str, page: FeedPage) -> None:
+        self.store[key] = page
 
 
 @pytest.fixture
@@ -61,12 +61,11 @@ def cache() -> FakeCache:
 async def client(tiktok: FakeSource, cache: FakeCache) -> AsyncIterator[httpx.AsyncClient]:
     app.dependency_overrides[get_sources] = lambda: {"tiktok": tiktok, "instagram": FakeSource()}
     app.dependency_overrides[get_cache] = lambda: cache
-    upstream = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(500)))
-    app.dependency_overrides[get_http_client] = lambda: upstream
+    app.dependency_overrides[get_media_session] = lambda: None
+    app.dependency_overrides[get_budget] = lambda: None
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
         yield http_client
-    await upstream.aclose()
     app.dependency_overrides.clear()
 
 
@@ -81,6 +80,8 @@ async def test_feed_returns_camel_case_posts(client: httpx.AsyncClient) -> None:
     assert body["cached"] is False
     assert body["posts"][0]["imageUrl"] == "/api/media?url=x"
     assert body["posts"][0]["isStory"] is False
+    assert body["nextCursor"] == "next1"
+    assert body["storiesStatus"] == "none"
 
 
 async def test_feed_serves_second_call_from_cache(
@@ -150,6 +151,8 @@ async def test_media_rejects_non_cdn_host(client: httpx.AsyncClient) -> None:
         ("http://p16-sign-sg.tiktokcdn.com/obj/a.jpeg", False),
         ("https://evil.com/?x=.tiktokcdn.com", False),
         ("https://tiktokcdn.com.evil.com/a.jpg", False),
+        ("https://v16-webapp-prime.tiktok.com/video/tos/a", True),
+        ("https://www.tiktok.com/@someone", False),
     ],
 )
 def test_is_allowed_media_url(url: str, expected: bool) -> None:
@@ -158,3 +161,35 @@ def test_is_allowed_media_url(url: str, expected: bool) -> None:
 
     # Assert
     assert result is expected
+
+
+async def test_feed_passes_cursor_and_caches_per_page(
+    client: httpx.AsyncClient, tiktok: FakeSource
+) -> None:
+    # Arrange
+    params = {"platform": "tiktok", "username": "someone"}
+    await client.get("/api/feed", params=params)
+
+    # Act
+    response = await client.get("/api/feed", params={**params, "cursor": "1"})
+
+    # Assert
+    assert response.json()["cached"] is False
+    assert tiktok.calls == [("someone", None), ("someone", "1")]
+
+
+async def test_rate_limit_error_carries_retry_after(
+    client: httpx.AsyncClient, tiktok: FakeSource
+) -> None:
+    # Arrange
+    from app.errors import RateLimitedError
+
+    tiktok.error = RateLimitedError("tunggu 5 menit", retry_after=300)
+
+    # Act
+    response = await client.get("/api/feed", params={"platform": "tiktok", "username": "x"})
+
+    # Assert
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "300"
+    assert response.json() == {"detail": "tunggu 5 menit", "retryAfter": 300}

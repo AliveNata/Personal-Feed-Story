@@ -5,19 +5,19 @@ from pydantic import TypeAdapter
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from app.models import Post
+from app.models import FeedPage
 
 logger = logging.getLogger(__name__)
-_posts_adapter = TypeAdapter(list[Post])
+_page_adapter = TypeAdapter(FeedPage)
 
 
 class FeedCache(Protocol):
-    async def get(self, key: str) -> list[Post] | None: ...
-    async def set(self, key: str, posts: list[Post]) -> None: ...
+    async def get(self, key: str) -> FeedPage | None: ...
+    async def set(self, key: str, page: FeedPage) -> None: ...
 
 
-def feed_cache_key(platform: str, username: str, limit: int) -> str:
-    return f"feed:{platform}:{username.lower()}:{limit}"
+def feed_cache_key(platform: str, username: str, cursor: str | None) -> str:
+    return f"feedpage:{platform}:{username.lower()}:{cursor or 'first'}"
 
 
 class RedisFeedCache:
@@ -25,7 +25,7 @@ class RedisFeedCache:
         self._redis = redis
         self._ttl_seconds = ttl_seconds
 
-    async def get(self, key: str) -> list[Post] | None:
+    async def get(self, key: str) -> FeedPage | None:
         try:
             raw = await self._redis.get(key)
         except RedisError as exc:
@@ -34,10 +34,10 @@ class RedisFeedCache:
             return None
         if raw is None:
             return None
-        return _posts_adapter.validate_json(raw)
+        return _page_adapter.validate_json(raw)
 
-    async def set(self, key: str, posts: list[Post]) -> None:
+    async def set(self, key: str, page: FeedPage) -> None:
         try:
-            await self._redis.set(key, _posts_adapter.dump_json(posts), ex=self._ttl_seconds)
+            await self._redis.set(key, _page_adapter.dump_json(page), ex=self._ttl_seconds)
         except RedisError as exc:
             logger.warning("redis set failed for %s: %s", key, exc)
