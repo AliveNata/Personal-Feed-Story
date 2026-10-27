@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.errors import PrivateAccountError, UpstreamError, UserNotFoundError
+from app.library.types import ResolvedPost
 from app.models import Post, proxied_media_url
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,16 @@ def map_douk_item(item: dict[str, Any]) -> Post:
         is_story=False,
         permalink=item.get("share_url") or None,
     )
+
+
+def douk_media_urls(item: dict[str, Any]) -> list[str]:
+    """Original media of a DouK item: one video URL, or a list of slides (photos or live clips)."""
+    downloads = item.get("downloads")
+    if isinstance(downloads, list):
+        return [str(url) for url in downloads if url]
+    if isinstance(downloads, str) and downloads:
+        return [downloads]
+    return []
 
 
 def _count(value: Any) -> int:
@@ -124,3 +135,27 @@ class TikTokSource:
         posts = [map_douk_item(item) for item in items if item.get("id")]
         posts.sort(key=lambda post: post.created_at, reverse=True)
         return posts[:limit]
+
+    async def resolve_media(self, username: str, post_id: str) -> ResolvedPost:
+        body = await self._post_douk(
+            "/tiktok/detail", {"detail_id": post_id, "cookie": self._cookie, "source": False}
+        )
+        item = body.get("data")
+        if not isinstance(item, dict) or not item.get("id"):
+            raise UserNotFoundError(f"Post TikTok {post_id} tidak ditemukan atau sudah dihapus")
+
+        timestamp = int(item.get("create_timestamp") or 0)
+        headers = {"Referer": "https://www.tiktok.com/"}
+        if self._cookie:
+            # TikTok video CDN rejects requests without the session cookies.
+            headers["Cookie"] = self._cookie
+        return ResolvedPost(
+            post_id=post_id,
+            author_username=username,
+            caption=str(item.get("desc") or ""),
+            permalink=item.get("share_url") or None,
+            posted_at=datetime.fromtimestamp(timestamp, tz=UTC) if timestamp else None,
+            is_story=False,
+            media_urls=douk_media_urls(item),
+            request_headers=headers,
+        )

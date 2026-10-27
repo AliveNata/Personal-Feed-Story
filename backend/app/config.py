@@ -24,6 +24,22 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["http://localhost:5173"]
 
+    # Set true on the VPS once it is served over https.
+    session_cookie_secure: bool = False
+
+    database_url: str = "postgresql+asyncpg://feed:feed@postgres:5432/feed"
+    library_dir: Path = Path("/data/library")
+    # Random pause between posts in a download job, to stay under platform rate limits.
+    instagram_delay_seconds: tuple[float, float] = (4.0, 9.0)
+    tiktok_delay_seconds: tuple[float, float] = (1.0, 3.0)
+    max_download_bytes: int = Field(default=500 * 1024 * 1024, gt=0)
+    max_posts_per_job: int = Field(default=50, gt=0)
+    # Lossy, off by default: originals are kept unless disk space becomes the problem.
+    compress_photos: bool = False
+    photo_webp_quality: int = Field(default=82, ge=1, le=100)
+    transcode_videos: bool = False
+    video_crf: int = Field(default=28, ge=0, le=51)
+
 
 @lru_cache
 def get_settings() -> Settings:

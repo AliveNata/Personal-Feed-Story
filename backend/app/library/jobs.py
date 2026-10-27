@@ -1,0 +1,184 @@
+"""Executes one download job: resolve each post, download its files, file them in the folder."""
+
+import asyncio
+import logging
+import random
+from collections.abc import Awaitable, Callable, Mapping
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.db import Blob, DownloadJob, MediaItem
+from app.errors import RateLimitedError, SourceError
+from app.library.storage import DownloadError, LibraryStorage
+from app.library.types import MediaResolver, ResolvedPost
+
+logger = logging.getLogger(__name__)
+
+Sleep = Callable[[float], Awaitable[None]]
+MAX_ERRORS_KEPT = 50
+
+
+class JobRunner:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        resolvers: Mapping[str, MediaResolver],
+        storage: LibraryStorage,
+        delays: Mapping[str, tuple[float, float]],
+        max_download_bytes: int,
+        sleep: Sleep = asyncio.sleep,
+    ) -> None:
+        self._session_factory = session_factory
+        self._resolvers = resolvers
+        self._storage = storage
+        self._delays = delays
+        self._max_download_bytes = max_download_bytes
+        self._sleep = sleep
+
+    async def run(self, job_id: str) -> None:
+        try:
+            await self._run(job_id)
+        except Exception:
+            # Without this the job row would stay "running" forever after a crash.
+            logger.exception("job %s crashed", job_id)
+            await self._finish(job_id, "failed")
+            raise
+
+    async def _run(self, job_id: str) -> None:
+        async with self._session_factory() as db:
+            job = await db.get(DownloadJob, job_id)
+            if job is None:
+                logger.warning("job %s vanished before it started (folder deleted?)", job_id)
+                return
+            job.status = "running"
+            await db.commit()
+            platform, username, folder_id = job.platform, job.username, job.folder_id
+            post_ids = list(job.post_ids)
+
+        resolver = self._resolvers[platform]
+        low, high = self._delays.get(platform, (0.0, 0.0))
+        for position, post_id in enumerate(post_ids):
+            if position > 0:
+                await self._sleep(random.uniform(low, high))
+            try:
+                resolved = await resolver.resolve_media(username, post_id)
+                saved, skipped = await self._save_post(folder_id, platform, resolved)
+            except RateLimitedError as exc:
+                # Continuing would only dig the rate limit deeper, so fail the rest at once.
+                remaining = post_ids[position:]
+                await self._record(job_id, failed=len(remaining), error=(post_id, str(exc)))
+                await self._finish(job_id, "failed")
+                return
+            except (SourceError, DownloadError) as exc:
+                logger.warning("job %s post %s failed: %s", job_id, post_id, exc)
+                await self._record(job_id, failed=1, error=(post_id, str(exc)))
+                continue
+            await self._record(job_id, done=1, saved=saved, skipped=skipped)
+
+        await self._finish(job_id, "done")
+
+    async def _save_post(
+        self, folder_id: int, platform: str, post: ResolvedPost
+    ) -> tuple[int, int]:
+        if not post.media_urls:
+            raise DownloadError("Post tidak punya media yang bisa di-download")
+        saved = skipped = 0
+        for index, url in enumerate(post.media_urls):
+            async with self._session_factory() as db:
+                exists = await db.scalar(
+                    select(MediaItem.id).where(
+                        MediaItem.folder_id == folder_id,
+                        MediaItem.platform == platform,
+                        MediaItem.source_post_id == post.post_id,
+                        MediaItem.item_index == index,
+                    )
+                )
+            if exists is not None:
+                skipped += 1
+                continue
+
+            downloaded = await self._storage.download(
+                url, post.request_headers, self._max_download_bytes
+            )
+            async with self._session_factory() as db:
+                blob = await db.get(Blob, downloaded.sha256)
+                if blob is None:
+                    stored = await self._storage.store(downloaded)
+                    blob = Blob(
+                        sha256=downloaded.sha256,
+                        media_type=stored.media_type,
+                        content_type=stored.content_type,
+                        extension=stored.extension,
+                        size_bytes=stored.size_bytes,
+                        original_size_bytes=downloaded.size_bytes,
+                        has_thumbnail=stored.has_thumbnail,
+                    )
+                    db.add(blob)
+                else:
+                    # Same bytes already stored for another folder or post: reuse them.
+                    self._storage.discard(downloaded)
+                db.add(
+                    MediaItem(
+                        folder_id=folder_id,
+                        blob_sha256=blob.sha256,
+                        media_type=blob.media_type,
+                        platform=platform,
+                        author_username=post.author_username,
+                        source_post_id=post.post_id,
+                        item_index=index,
+                        is_story=post.is_story,
+                        caption=post.caption,
+                        permalink=post.permalink,
+                        posted_at=post.posted_at,
+                    )
+                )
+                try:
+                    await db.commit()
+                except IntegrityError:
+                    # Folder was deleted mid job, or a parallel job saved the same item.
+                    await db.rollback()
+                    logger.info(
+                        "item %s#%d not saved: already exists or folder gone", post.post_id, index
+                    )
+                    skipped += 1
+                    continue
+            saved += 1
+        return saved, skipped
+
+    async def _record(
+        self,
+        job_id: str,
+        *,
+        done: int = 0,
+        failed: int = 0,
+        saved: int = 0,
+        skipped: int = 0,
+        error: tuple[str, str] | None = None,
+    ) -> None:
+        async with self._session_factory() as db:
+            job = await db.get(DownloadJob, job_id)
+            if job is None:
+                return
+            job.done_posts += done
+            job.failed_posts += failed
+            job.saved_items += saved
+            job.skipped_items += skipped
+            if error is not None and len(job.errors) < MAX_ERRORS_KEPT:
+                # Reassign so SQLAlchemy sees the JSON column change.
+                job.errors = [*job.errors, {"postId": error[0], "message": error[1]}]
+            await db.commit()
+
+    async def _finish(self, job_id: str, status: str) -> None:
+        async with self._session_factory() as db:
+            job = await db.get(DownloadJob, job_id)
+            if job is None:
+                return
+            job.status = status
+            await db.commit()
+            logger.info(
+                "job %s %s: %d/%d posts, %d saved, %d skipped, %d failed",
+                job_id, status, job.done_posts, job.total_posts,
+                job.saved_items, job.skipped_items, job.failed_posts,
+            )  # fmt: skip

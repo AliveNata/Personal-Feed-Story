@@ -16,6 +16,21 @@ services:
     tty: true
     restart: unless-stopped
 
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: feed
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-feed}
+      POSTGRES_DB: feed
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U feed -d feed"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   redis:
     image: redis:7.4-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]
@@ -26,14 +41,36 @@ services:
     image: personal-feed-story/backend:dev
     pull_policy: build
     env_file: ./backend/.env
-    environment:
+    environment: &backend-env
       DOUK_BASE_URL: http://douk:5555
       REDIS_URL: redis://redis:6379/0
-    volumes:
+      DATABASE_URL: postgresql+asyncpg://feed:${POSTGRES_PASSWORD:-feed}@postgres:5432/feed
+      LIBRARY_DIR: /data/library
+    volumes: &backend-volumes
       - ./backend/secrets:/app/secrets:ro
+      - ./data/library:/data/library
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
-      - douk
-      - redis
+      douk:
+        condition: service_started
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+
+  worker:
+    image: personal-feed-story/backend:dev
+    pull_policy: never
+    command: ["arq", "app.worker.WorkerSettings"]
+    env_file: ./backend/.env
+    environment: *backend-env
+    volumes: *backend-volumes
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:

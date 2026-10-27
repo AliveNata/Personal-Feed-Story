@@ -4,19 +4,25 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 import httpx
+from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 
+from app import auth
 from app.cache import FeedCache, RedisFeedCache, feed_cache_key
 from app.config import get_settings
+from app.db import build_engine, build_session_factory
 from app.errors import SourceError
+from app.library import routes as library_routes
 from app.media import ALLOWED_CONTENT_TYPE_PREFIXES, is_allowed_media_url, referer_for
 from app.models import FeedResponse, Platform
 from app.sources import FeedSource
 from app.sources.instagram import InstagramSource, build_loader
 from app.sources.tiktok import BROWSER_USER_AGENT, TikTokSource
+from app.worker import build_storage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -30,8 +36,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     http_client = httpx.AsyncClient(timeout=settings.http_timeout_seconds)
     redis = Redis.from_url(settings.redis_url)
+    engine = build_engine(settings.database_url)
+    queue = await create_pool(RedisSettings.from_dsn(settings.redis_url))
 
     app.state.http_client = http_client
+    app.state.redis = redis
+    app.state.session_factory = build_session_factory(engine)
+    app.state.queue = queue
+    app.state.storage = build_storage(settings)
     app.state.cache = RedisFeedCache(redis, settings.cache_ttl_seconds)
     app.state.sources = {
         "tiktok": TikTokSource(
@@ -50,15 +62,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await http_client.aclose()
         await redis.aclose()
+        await queue.aclose()
+        await engine.dispose()
 
 
 app = FastAPI(title="Personal Feed Story API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
-    allow_methods=["GET"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type"],
+    allow_credentials=True,
 )
+app.include_router(auth.router)
+app.include_router(library_routes.router)
 
 
 @app.exception_handler(SourceError)

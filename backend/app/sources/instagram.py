@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import threading
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from itertools import islice
 from pathlib import Path
@@ -15,6 +16,7 @@ from instaloader.exceptions import (
     PrivateProfileNotFollowedException,
     ProfileNotExistsException,
     QueryReturnedForbiddenException,
+    QueryReturnedNotFoundException,
     TooManyRequestsException,
 )
 
@@ -24,6 +26,7 @@ from app.errors import (
     UpstreamError,
     UserNotFoundError,
 )
+from app.library.types import ResolvedPost
 from app.models import Post, proxied_media_url
 
 logger = logging.getLogger(__name__)
@@ -43,6 +46,36 @@ class InstagramStoryItemLike(Protocol):
     url: str
     caption: str | None
     date_utc: datetime
+
+
+class InstagramSidecarNodeLike(Protocol):
+    is_video: bool
+    display_url: str
+    video_url: str | None
+
+
+class InstagramFullPostLike(Protocol):
+    typename: str
+    is_video: bool
+    url: str
+    video_url: str | None
+
+    def get_sidecar_nodes(self) -> "Iterable[InstagramSidecarNodeLike]": ...
+
+
+def instagram_media_urls(post: InstagramFullPostLike) -> list[str]:
+    """Every original file of a post: all carousel slides, video file instead of its cover."""
+    if post.typename == "GraphSidecar":
+        return [
+            (node.video_url or node.display_url) if node.is_video else node.display_url
+            for node in post.get_sidecar_nodes()
+        ]
+    if post.is_video and post.video_url:
+        return [post.video_url]
+    return [post.url]
+
+
+STORY_ID_PREFIX = "story-"
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -144,3 +177,49 @@ class InstagramSource:
             # Stories are a bonus, so a failure here should not drop the posts.
             logger.warning("instagram stories fetch failed for %s: %s", user_id, exc)
             return []
+
+    async def resolve_media(self, username: str, post_id: str) -> ResolvedPost:
+        return await asyncio.to_thread(self._resolve_media_sync, username, post_id)
+
+    def _resolve_media_sync(self, username: str, post_id: str) -> ResolvedPost:
+        context = self._loader.context
+        with self._lock:
+            try:
+                if post_id.startswith(STORY_ID_PREFIX):
+                    if not context.is_logged_in:
+                        raise PrivateAccountError("Download story butuh session Instagram")
+                    item = instaloader.StoryItem.from_mediaid(
+                        context, int(post_id.removeprefix(STORY_ID_PREFIX))
+                    )
+                    url = item.video_url if item.is_video and item.video_url else item.url
+                    return ResolvedPost(
+                        post_id=post_id,
+                        author_username=username,
+                        caption=item.caption or "",
+                        permalink=None,
+                        posted_at=_as_utc(item.date_utc),
+                        is_story=True,
+                        media_urls=[url],
+                        request_headers={"Referer": "https://www.instagram.com/"},
+                    )
+
+                post = instaloader.Post.from_shortcode(context, post_id)
+                return ResolvedPost(
+                    post_id=post_id,
+                    author_username=username,
+                    caption=post.caption or "",
+                    permalink=f"https://www.instagram.com/p/{post_id}/",
+                    posted_at=_as_utc(post.date_utc),
+                    is_story=False,
+                    media_urls=instagram_media_urls(post),
+                    request_headers={"Referer": "https://www.instagram.com/"},
+                )
+            except TooManyRequestsException as exc:
+                raise RateLimitedError("Instagram rate limit, coba lagi nanti") from exc
+            except (QueryReturnedNotFoundException, ProfileNotExistsException) as exc:
+                raise UserNotFoundError(f"Post Instagram {post_id} tidak ditemukan") from exc
+            except (PrivateProfileNotFollowedException, LoginRequiredException) as exc:
+                raise PrivateAccountError(f"Post {post_id} private atau butuh login") from exc
+            except ConnectionException as exc:
+                logger.error("instagram resolve failed for %s: %s", post_id, exc)
+                raise UpstreamError(f"Gagal mengambil post Instagram {post_id}") from exc
