@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { ApiError } from '../utils/api';
+import PasswordInput from './PasswordInput';
 import { focusRing } from './ui';
 
 const Login: React.FC = () => {
@@ -60,14 +61,11 @@ const Login: React.FC = () => {
           <label htmlFor="login-password" className="block text-sm font-semibold text-gray-700 mb-1">
             Password
           </label>
-          <input
+          <PasswordInput
             id="login-password"
-            type="password"
             autoComplete="current-password"
             value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            className={inputClass}
-            required
+            onChange={setPassword}
           />
         </div>
         {error && (
