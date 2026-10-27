@@ -197,6 +197,22 @@ def build_loader(
     return loader
 
 
+def _to_highlight(item: Any) -> Highlight:
+    # Full cover first: IG's cropped cover URL often carries crop coordinates outside the
+    # image, and the CDN then answers 200 with a solid black 150x150 JPEG instead of an
+    # error, so the UI cannot detect it. The UI crops the full cover to a circle itself.
+    full = _safe_cover(item, "cover_url")
+    cropped = _safe_cover(item, "cover_cropped_url")
+    primary, fallback = (full, cropped) if full else (cropped, "")
+    return Highlight(
+        id=str(item.unique_id),
+        title=item.title,
+        cover_url=proxied_media_url(primary),
+        fallback_cover_url=proxied_media_url(fallback) or None,
+        item_count=None,
+    )
+
+
 def _safe_cover(highlight: Any, attribute: str) -> str:
     # Cover fields come straight from IG's JSON and are missing on some highlights.
     try:
@@ -332,16 +348,7 @@ class InstagramSource:
 
     def _list_highlights_sync(self, username: str) -> tuple[str, list[Highlight]]:
         profile = instaloader.Profile.from_username(self._loader.context, username)
-        highlights = [
-            Highlight(
-                id=str(item.unique_id),
-                title=item.title,
-                cover_url=proxied_media_url(_safe_cover(item, "cover_cropped_url")),
-                fallback_cover_url=proxied_media_url(_safe_cover(item, "cover_url")) or None,
-                item_count=None,
-            )
-            for item in self._loader.get_highlights(profile.userid)
-        ]
+        highlights = [_to_highlight(item) for item in self._loader.get_highlights(profile.userid)]
         return ("available" if highlights else "none"), highlights
 
     async def highlight_items(self, username: str, highlight_id: str) -> list[Post]:

@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from app.sources.instagram import (
+    _to_highlight,
     instagram_media_urls,
     instagram_slides,
     map_instagram_post,
@@ -136,3 +137,36 @@ def test_story_video_item_uses_video_file_with_poster() -> None:
     # Assert
     assert result.media[0].type == "video"
     assert "s.mp4" in result.media[0].url
+
+
+@dataclass
+class FakeHighlight:
+    unique_id: int
+    title: str
+    cover_url: str | None
+    cover_cropped_url: str | None
+
+
+def test_highlight_prefers_full_cover_over_cropped() -> None:
+    # Arrange
+    item = FakeHighlight(1, "me", "https://cdn.test/full.jpg", "https://cdn.test/crop.jpg")
+
+    # Act
+    highlight = _to_highlight(item)
+
+    # Assert
+    assert "full.jpg" in highlight.cover_url
+    assert highlight.fallback_cover_url is not None
+    assert "crop.jpg" in highlight.fallback_cover_url
+
+
+def test_highlight_uses_cropped_cover_when_full_missing() -> None:
+    # Arrange
+    item = FakeHighlight(2, "job", None, "https://cdn.test/crop.jpg")
+
+    # Act
+    highlight = _to_highlight(item)
+
+    # Assert
+    assert "crop.jpg" in highlight.cover_url
+    assert highlight.fallback_cover_url is None
