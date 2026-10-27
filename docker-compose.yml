@@ -2,10 +2,13 @@ name: personal-feed-story
 
 services:
   douk:
-    # Built from the pinned upstream tag instead of a floating image tag.
+    # Built from the pinned upstream tag (see douk/Dockerfile) instead of a floating image tag.
     build:
-      context: https://github.com/JoeanAmier/TikTokDownloader.git#5.8
+      context: ./douk
+      args:
+        DOUK_REF: "5.8"
     image: personal-feed-story/douk:5.8
+    pull_policy: build
     # No published ports: DouK has no auth, so it must only be reachable from backend.
     volumes:
       - ./douk/volume:/app/Volume
@@ -21,6 +24,7 @@ services:
   backend:
     build: ./backend
     image: personal-feed-story/backend:dev
+    pull_policy: build
     env_file: ./backend/.env
     environment:
       DOUK_BASE_URL: http://douk:5555

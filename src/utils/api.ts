@@ -26,7 +26,10 @@ export const fetchFeed = async (
     const detail =
       body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string'
         ? body.detail
-        : `Request gagal (${response.status})`;
+        : // Vite's proxy answers an empty 500 when the backend is down, so cover both cases.
+          response.status === 500
+          ? 'Backend mati atau error. Cek terminal docker compose up.'
+          : `Request gagal (${response.status})`;
     throw new ApiError(detail, response.status);
   }
   return (await response.json()) as FeedResponse;
