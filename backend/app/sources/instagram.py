@@ -197,6 +197,15 @@ def build_loader(
     return loader
 
 
+def _safe_cover(highlight: Any, attribute: str) -> str:
+    # Cover fields come straight from IG's JSON and are missing on some highlights.
+    try:
+        return str(getattr(highlight, attribute) or "")
+    except (KeyError, TypeError):
+        logger.info("highlight %s has no %s", getattr(highlight, "title", "?"), attribute)
+        return ""
+
+
 class CursorStore:
     """Keeps instaloader's frozen iterators server side; they are too big for a URL."""
 
@@ -327,7 +336,8 @@ class InstagramSource:
             Highlight(
                 id=str(item.unique_id),
                 title=item.title,
-                cover_url=proxied_media_url(item.cover_cropped_url or item.cover_url),
+                cover_url=proxied_media_url(_safe_cover(item, "cover_cropped_url")),
+                fallback_cover_url=proxied_media_url(_safe_cover(item, "cover_url")) or None,
                 item_count=None,
             )
             for item in self._loader.get_highlights(profile.userid)

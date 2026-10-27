@@ -65,6 +65,8 @@ class Highlight(CamelModel):
     id: str
     title: str
     cover_url: str
+    # Uncropped cover, tried by the UI when the cropped one fails to load.
+    fallback_cover_url: str | None = None
     item_count: int | None
 
 

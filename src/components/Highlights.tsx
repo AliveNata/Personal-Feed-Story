@@ -26,6 +26,30 @@ type ItemsState =
   | { status: 'error'; highlight: Highlight; message: string }
   | { status: 'ready'; highlight: Highlight; items: Post[] };
 
+/** Cropped cover first, then the full cover, then the title initial. */
+const HighlightCover: React.FC<{ highlight: Highlight; isActive: boolean }> = ({ highlight, isActive }) => {
+  const sources = [highlight.coverUrl, highlight.fallbackCoverUrl].filter((url): url is string => !!url);
+  const [attempt, setAttempt] = useState(0);
+  const ring = `h-16 w-16 rounded-full ring-2 ring-offset-2 ${isActive ? 'ring-gray-900' : 'ring-gray-300'}`;
+
+  if (attempt >= sources.length) {
+    return (
+      <span aria-hidden="true" className={`${ring} flex items-center justify-center bg-gray-300 text-xl font-bold text-gray-800`}>
+        {highlight.title.trim().charAt(0).toUpperCase() || '?'}
+      </span>
+    );
+  }
+  return (
+    <img
+      src={sources[attempt]}
+      alt=""
+      loading="lazy"
+      onError={() => setAttempt((current) => current + 1)}
+      className={`${ring} object-cover bg-gray-200`}
+    />
+  );
+};
+
 const errorText = (error: unknown, fallback: string) =>
   error instanceof ApiError ? error.message : fallback;
 
@@ -116,14 +140,7 @@ const Highlights: React.FC<HighlightsProps> = ({
                 aria-pressed={activeId === highlight.id}
                 className={`flex w-20 flex-col items-center gap-1 rounded-md p-1 ${focusRing}`}
               >
-                <img
-                  src={highlight.coverUrl}
-                  alt=""
-                  loading="lazy"
-                  className={`h-16 w-16 rounded-full object-cover bg-gray-200 ring-2 ring-offset-2 ${
-                    activeId === highlight.id ? 'ring-gray-900' : 'ring-gray-300'
-                  }`}
-                />
+                <HighlightCover highlight={highlight} isActive={activeId === highlight.id} />
                 <span className="w-full truncate text-center text-xs text-gray-800">{highlight.title}</span>
               </button>
             </li>

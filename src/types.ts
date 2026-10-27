@@ -44,6 +44,7 @@ export interface Highlight {
   id: string;
   title: string;
   coverUrl: string;
+  fallbackCoverUrl: string | null;
   itemCount: number | null;
 }
 
