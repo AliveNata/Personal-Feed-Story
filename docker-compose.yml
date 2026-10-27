@@ -1,0 +1,35 @@
+name: personal-feed-story
+
+services:
+  douk:
+    # Built from the pinned upstream tag instead of a floating image tag.
+    build:
+      context: https://github.com/JoeanAmier/TikTokDownloader.git#5.8
+    image: personal-feed-story/douk:5.8
+    # No published ports: DouK has no auth, so it must only be reachable from backend.
+    volumes:
+      - ./douk/volume:/app/Volume
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    image: personal-feed-story/backend:dev
+    env_file: ./backend/.env
+    environment:
+      DOUK_BASE_URL: http://douk:5555
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./backend/secrets:/app/secrets:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - douk
+      - redis
+    restart: unless-stopped

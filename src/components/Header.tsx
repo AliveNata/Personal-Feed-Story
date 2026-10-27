@@ -4,19 +4,13 @@ import { Instagram, LogOut } from 'lucide-react';
 import TikTokIcon from './TikTokIcon';
 
 interface HeaderProps {
-  username: string;
-  setUsername: (username: string) => void;
   platform: 'instagram' | 'tiktok';
-  setPlatform: (platform: 'instagram' | 'tiktok') => void;
   isAuthenticated: boolean;
   setIsAuthenticated: (isAuthenticated: boolean) => void;
 }
 
 const Header: React.FC<HeaderProps> = ({
-  username,
-  setUsername,
   platform,
-  setPlatform,
   isAuthenticated,
   setIsAuthenticated,
 }) => {
