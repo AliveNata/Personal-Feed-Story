@@ -98,7 +98,9 @@ const PostCarousel: React.FC<PostCarouselProps> = ({ post, isSaved }) => {
     setIndex((next + total) % total);
   };
 
-  const arrowClass = `absolute top-1/2 -translate-y-1/2 flex h-11 w-11 items-center justify-center rounded-full bg-white/90 text-gray-900 shadow ${focusRing}`;
+  // Frosted glass so the arrows do not cover the photo. Dark tint + white border keeps the
+  // white icon readable on both bright and dark images.
+  const arrowClass = `absolute top-1/2 -translate-y-1/2 flex h-11 w-11 items-center justify-center rounded-full border border-white/40 bg-black/20 text-white backdrop-blur-md transition-colors hover:bg-black/35 ${focusRing}`;
 
   return (
     <div
@@ -143,10 +145,10 @@ const PostCarousel: React.FC<PostCarouselProps> = ({ post, isSaved }) => {
       {total > 1 && (
         <>
           <button type="button" onClick={() => go(index - 1)} aria-label="Slide sebelumnya" className={`left-2 ${arrowClass}`}>
-            <ChevronLeft className="h-6 w-6" aria-hidden="true" />
+            <ChevronLeft className="h-6 w-6 drop-shadow" aria-hidden="true" />
           </button>
           <button type="button" onClick={() => go(index + 1)} aria-label="Slide berikutnya" className={`right-2 ${arrowClass}`}>
-            <ChevronRight className="h-6 w-6" aria-hidden="true" />
+            <ChevronRight className="h-6 w-6 drop-shadow" aria-hidden="true" />
           </button>
           <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1">
             {slides.map((slide, slideIndex) => (
