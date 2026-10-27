@@ -2,10 +2,13 @@
 
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from curl_cffi.requests import AsyncSession
+from curl_cffi.requests.exceptions import RequestException
 
 from app.errors import PrivateAccountError, UpstreamError, UserNotFoundError
 from app.models import Post, proxied_media_url
@@ -20,6 +23,23 @@ BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 )
+
+
+# (status_code, body) for a profile URL. Injected so tests do not hit TikTok.
+ProfilePageFetcher = Callable[[str, str], Awaitable[tuple[int, str]]]
+
+
+async def fetch_profile_page(url: str, cookie: str) -> tuple[int, str]:
+    """Fetch with a browser TLS fingerprint: TikTok's WAF answers 403 to plain httpx clients."""
+    headers = {"Cookie": cookie} if cookie else {}
+    try:
+        # No custom User-Agent: it has to match the impersonated browser fingerprint.
+        async with AsyncSession(impersonate="chrome") as session:
+            response = await session.get(url, headers=headers, timeout=30, allow_redirects=True)
+    except RequestException as exc:
+        logger.warning("tiktok profile request failed for %s: %s", url, exc)
+        raise UpstreamError("Gagal menghubungi TikTok") from exc
+    return response.status_code, response.text
 
 
 def map_douk_item(item: dict[str, Any]) -> Post:
@@ -59,8 +79,10 @@ class TikTokSource:
         douk_base_url: str,
         cookie: str,
         lookback_days: int,
+        profile_fetcher: ProfilePageFetcher = fetch_profile_page,
     ) -> None:
         self._http = http_client
+        self._fetch_profile = profile_fetcher
         self._douk_base_url = douk_base_url.rstrip("/")
         self._cookie = cookie
         self._lookback_days = lookback_days
@@ -69,23 +91,20 @@ class TikTokSource:
         if username.startswith(SEC_UID_PREFIX):
             return username
 
-        headers = {"User-Agent": BROWSER_USER_AGENT}
-        if self._cookie:
-            headers["Cookie"] = self._cookie
-        try:
-            response = await self._http.get(
-                f"https://www.tiktok.com/@{username}", headers=headers, follow_redirects=True
-            )
-        except httpx.HTTPError as exc:
-            logger.warning("tiktok profile lookup failed for %s: %s", username, exc)
-            raise UpstreamError("Gagal menghubungi TikTok") from exc
+        status_code, body = await self._fetch_profile(
+            f"https://www.tiktok.com/@{username}", self._cookie
+        )
 
-        if response.status_code == 404:
+        if status_code == 404:
             raise UserNotFoundError(f"Akun TikTok @{username} tidak ditemukan")
-        if response.status_code >= 400:
-            raise UpstreamError(f"TikTok membalas status {response.status_code}")
+        if status_code >= 400:
+            logger.warning("tiktok profile page for %s returned %s", username, status_code)
+            raise UpstreamError(
+                f"TikTok membalas status {status_code}. "
+                "Coba lagi, atau ganti cookie kalau terus terjadi"
+            )
 
-        match = SEC_UID_PATTERN.search(response.text)
+        match = SEC_UID_PATTERN.search(body)
         if match is None:
             # TikTok serves a 200 page even for missing users, without the user block.
             raise UserNotFoundError(f"Akun TikTok @{username} tidak ditemukan")

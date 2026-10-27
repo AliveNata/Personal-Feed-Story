@@ -6,7 +6,7 @@ import pytest
 import respx
 
 from app.errors import PrivateAccountError, UpstreamError, UserNotFoundError
-from app.sources.tiktok import TikTokSource, map_douk_item
+from app.sources.tiktok import ProfilePageFetcher, TikTokSource, map_douk_item
 
 DOUK_URL = "http://douk:5555"
 SEC_UID = "MS4wLjABAAAAabc_DEF-123"
@@ -28,8 +28,23 @@ def douk_item(**overrides: Any) -> dict[str, Any]:
     return item
 
 
-def make_source(client: httpx.AsyncClient) -> TikTokSource:
-    return TikTokSource(client, DOUK_URL, cookie="sid=x", lookback_days=30)
+def fake_profile_fetcher(status_code: int, body: str) -> ProfilePageFetcher:
+    async def fetch(url: str, cookie: str) -> tuple[int, str]:
+        return status_code, body
+
+    return fetch
+
+
+def make_source(
+    client: httpx.AsyncClient, profile_fetcher: ProfilePageFetcher | None = None
+) -> TikTokSource:
+    return TikTokSource(
+        client,
+        DOUK_URL,
+        cookie="sid=x",
+        lookback_days=30,
+        profile_fetcher=profile_fetcher or fake_profile_fetcher(500, ""),
+    )
 
 
 def test_map_douk_item_maps_video_fields() -> None:
@@ -85,30 +100,37 @@ async def test_resolve_sec_uid_passes_through_existing_sec_uid() -> None:
     assert result == SEC_UID
 
 
-@respx.mock
 async def test_resolve_sec_uid_reads_profile_page() -> None:
     # Arrange
     user_json = f'{{"id":"1","verified":false,"secUid":"{SEC_UID}","uniqueId":"someone"}}'
-    html = f"<script>{user_json}</script>"
-    respx.get("https://www.tiktok.com/@someone").respond(200, text=html)
+    fetcher = fake_profile_fetcher(200, f"<script>{user_json}</script>")
 
     async with httpx.AsyncClient() as client:
         # Act
-        result = await make_source(client).resolve_sec_uid("someone")
+        result = await make_source(client, fetcher).resolve_sec_uid("someone")
 
     # Assert
     assert result == SEC_UID
 
 
-@respx.mock
 async def test_resolve_sec_uid_raises_not_found_when_page_has_no_user() -> None:
     # Arrange
-    respx.get("https://www.tiktok.com/@ghost").respond(200, text="<html></html>")
+    fetcher = fake_profile_fetcher(200, "<html></html>")
 
     async with httpx.AsyncClient() as client:
         # Act / Assert
         with pytest.raises(UserNotFoundError):
-            await make_source(client).resolve_sec_uid("ghost")
+            await make_source(client, fetcher).resolve_sec_uid("ghost")
+
+
+async def test_resolve_sec_uid_raises_upstream_on_waf_block() -> None:
+    # Arrange
+    fetcher = fake_profile_fetcher(403, "blocked")
+
+    async with httpx.AsyncClient() as client:
+        # Act / Assert
+        with pytest.raises(UpstreamError):
+            await make_source(client, fetcher).resolve_sec_uid("someone")
 
 
 @respx.mock
