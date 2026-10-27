@@ -3,12 +3,14 @@
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import case, delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import Blob, DownloadJob, Folder, MediaItem
-from app.library.storage import LibraryStorage
+from app.library.storage import DownloadedFile, LibraryStorage
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,72 @@ class FolderSummary:
     photo_count: int
     video_count: int
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class ItemSource:
+    """Where a file in a folder came from: a platform post, or a manual upload."""
+
+    platform: str
+    author_username: str
+    source_post_id: str
+    item_index: int
+    is_story: bool = False
+    caption: str = ""
+    permalink: str | None = None
+    posted_at: datetime | None = None
+
+
+async def add_file_to_folder(
+    db: AsyncSession,
+    storage: LibraryStorage,
+    folder_id: int,
+    downloaded: DownloadedFile,
+    source: ItemSource,
+) -> MediaItem | None:
+    """Store the file once per sha256 and link it to the folder. None when it was already there."""
+    blob = await db.get(Blob, downloaded.sha256)
+    if blob is None:
+        stored = await storage.store(downloaded)
+        blob = Blob(
+            sha256=downloaded.sha256,
+            media_type=stored.media_type,
+            content_type=stored.content_type,
+            extension=stored.extension,
+            size_bytes=stored.size_bytes,
+            original_size_bytes=downloaded.size_bytes,
+            has_thumbnail=stored.has_thumbnail,
+        )
+        db.add(blob)
+    else:
+        # Same bytes already stored for another folder or post: reuse them.
+        storage.discard(downloaded)
+
+    item = MediaItem(
+        folder_id=folder_id,
+        blob_sha256=blob.sha256,
+        media_type=blob.media_type,
+        platform=source.platform,
+        author_username=source.author_username,
+        source_post_id=source.source_post_id,
+        item_index=source.item_index,
+        is_story=source.is_story,
+        caption=source.caption,
+        permalink=source.permalink,
+        posted_at=source.posted_at,
+    )
+    db.add(item)
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Already in this folder (same source), or the folder was deleted meanwhile.
+        await db.rollback()
+        logger.info(
+            "%s#%d not saved: duplicate or folder gone", source.source_post_id, source.item_index
+        )
+        return None
+    await db.refresh(item, ["blob"])
+    return item
 
 
 def normalize_folder_name(name: str) -> str:

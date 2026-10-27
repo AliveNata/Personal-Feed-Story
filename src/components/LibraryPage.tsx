@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Folder } from '../types';
 import { ApiError, deleteFolder, fetchFolders, formatBytes } from '../utils/api';
-import { ConfirmDelete, Panel, focusRing, primaryButton } from './ui';
+import UploadDialog from './UploadDialog';
+import { ConfirmDelete, Panel, focusRing, primaryButton, secondaryButton } from './ui';
 
 type LoadState =
   | { status: 'loading' }
@@ -13,9 +14,10 @@ const dateFormat = new Intl.DateTimeFormat('id', { dateStyle: 'medium' });
 
 const LibraryPage: React.FC = () => {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const [uploadTarget, setUploadTarget] = useState<Folder | null>(null);
 
-  const load = useCallback(() => {
-    setState({ status: 'loading' });
+  const load = useCallback((silent = false) => {
+    if (!silent) setState({ status: 'loading' });
     fetchFolders()
       .then((folders) => setState({ status: 'ready', folders }))
       .catch((caught: unknown) => {
@@ -27,7 +29,7 @@ const LibraryPage: React.FC = () => {
       });
   }, []);
 
-  useEffect(load, [load]);
+  useEffect(() => load(), [load]);
 
   const handleDelete = async (folderId: number) => {
     await deleteFolder(folderId);
@@ -51,7 +53,7 @@ const LibraryPage: React.FC = () => {
       {state.status === 'error' && (
         <Panel role="alert" tone="error">
           <p className="mb-4 text-gray-800">{state.message}</p>
-          <button type="button" className={primaryButton} onClick={load}>
+          <button type="button" className={primaryButton} onClick={() => load()}>
             Coba lagi
           </button>
         </Panel>
@@ -86,14 +88,28 @@ const LibraryPage: React.FC = () => {
                   {' · '}dibuat {dateFormat.format(new Date(folder.createdAt))}
                 </p>
               </div>
-              <ConfirmDelete
-                label="Hapus folder"
-                confirmText={`Hapus "${folder.name}" beserta semua isinya?`}
-                onConfirm={() => handleDelete(folder.id)}
-              />
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" className={secondaryButton} onClick={() => setUploadTarget(folder)}>
+                  Tambah file
+                </button>
+                <ConfirmDelete
+                  label="Hapus folder"
+                  confirmText={`Hapus "${folder.name}" beserta semua isinya?`}
+                  onConfirm={() => handleDelete(folder.id)}
+                />
+              </div>
             </li>
           ))}
         </ul>
+      )}
+
+      {uploadTarget && (
+        <UploadDialog
+          folderId={uploadTarget.id}
+          folderName={uploadTarget.name}
+          onClose={() => setUploadTarget(null)}
+          onUploaded={() => load(true)}
+        />
       )}
     </div>
   );

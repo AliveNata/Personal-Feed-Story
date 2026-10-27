@@ -17,6 +17,7 @@ dependencies = [
   "arq>=0.26",
   "pillow>=11.0",
   "curl-cffi>=0.11",
+  "python-multipart>=0.0.20",
 ]
 
 [dependency-groups]

@@ -6,11 +6,11 @@ import random
 from collections.abc import Awaitable, Callable, Mapping
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db import Blob, DownloadJob, MediaItem
+from app.db import DownloadJob, MediaItem
 from app.errors import RateLimitedError, SourceError
+from app.library import service
 from app.library.storage import DownloadError, LibraryStorage
 from app.library.types import MediaResolver, ResolvedPost
 
@@ -103,27 +103,12 @@ class JobRunner:
                 url, post.request_headers, self._max_download_bytes
             )
             async with self._session_factory() as db:
-                blob = await db.get(Blob, downloaded.sha256)
-                if blob is None:
-                    stored = await self._storage.store(downloaded)
-                    blob = Blob(
-                        sha256=downloaded.sha256,
-                        media_type=stored.media_type,
-                        content_type=stored.content_type,
-                        extension=stored.extension,
-                        size_bytes=stored.size_bytes,
-                        original_size_bytes=downloaded.size_bytes,
-                        has_thumbnail=stored.has_thumbnail,
-                    )
-                    db.add(blob)
-                else:
-                    # Same bytes already stored for another folder or post: reuse them.
-                    self._storage.discard(downloaded)
-                db.add(
-                    MediaItem(
-                        folder_id=folder_id,
-                        blob_sha256=blob.sha256,
-                        media_type=blob.media_type,
+                item = await service.add_file_to_folder(
+                    db,
+                    self._storage,
+                    folder_id,
+                    downloaded,
+                    service.ItemSource(
                         platform=platform,
                         author_username=post.author_username,
                         source_post_id=post.post_id,
@@ -132,18 +117,11 @@ class JobRunner:
                         caption=post.caption,
                         permalink=post.permalink,
                         posted_at=post.posted_at,
-                    )
+                    ),
                 )
-                try:
-                    await db.commit()
-                except IntegrityError:
-                    # Folder was deleted mid job, or a parallel job saved the same item.
-                    await db.rollback()
-                    logger.info(
-                        "item %s#%d not saved: already exists or folder gone", post.post_id, index
-                    )
-                    skipped += 1
-                    continue
+            if item is None:
+                skipped += 1
+                continue
             saved += 1
         return saved, skipped
 

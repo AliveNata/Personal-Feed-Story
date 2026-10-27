@@ -2,6 +2,7 @@
 
 python -m app.cli create-user <username>
 python -m app.cli set-password <username>
+python -m app.cli ig-session --out /tmp/secrets/ig-session
 """
 
 import argparse
@@ -56,12 +57,38 @@ async def _set_password(username: str, password: str) -> None:
     print(f"Password {username} diganti, semua sesi lama dihapus")
 
 
+def _ig_session(out_path: str) -> None:
+    """Build an instaloader session from browser cookies, skipping IG's login checkpoint."""
+    import instaloader
+
+    raw = getpass.getpass("Paste header Cookie dari instagram.com (tidak tampil di layar): ")
+    cookies = dict(
+        part.strip().split("=", 1) for part in raw.split(";") if "=" in part and part.strip()
+    )
+    if "sessionid" not in cookies:
+        sys.exit("Cookie tidak punya sessionid. Pastikan login dulu di instagram.com")
+
+    loader = instaloader.Instaloader(quiet=True)
+    loader.load_session("", cookies)
+    username = loader.test_login()
+    if not username:
+        sys.exit("Session ditolak Instagram. Ambil cookie baru dari browser yang sedang login")
+    loader.context.username = username
+    loader.save_session_to_file(out_path)
+    print(f"Session {username} disimpan ke {out_path}. Isi IG_USERNAME={username} di backend/.env")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("create-user", "set-password"):
         sub.add_parser(name).add_argument("username")
+    sub.add_parser("ig-session").add_argument("--out", default="/tmp/secrets/ig-session")
     args = parser.parse_args()
+
+    if args.command == "ig-session":
+        _ig_session(args.out)
+        return
 
     password = _prompt_password()
     if args.command == "create-user":

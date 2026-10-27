@@ -4,6 +4,8 @@ Feed viewer for TikTok and Instagram accounts, with a private download library. 
 
 - Anyone can view a feed.
 - After login (one account, created from the CLI) you can tick posts and stories, download them into a named folder, and browse the folder with Photo and Video tabs. Folders and single files can be deleted.
+- Posts already in any folder are greyed out in the feed and cannot be ticked again.
+- "Tambah file" uploads your own photos and videos into a folder (drag and drop or file picker). The tab is picked from the file extension.
 
 ## Architecture
 
@@ -75,11 +77,13 @@ Change it later with `python -m app.cli set-password aliv`, which also logs out 
 
 ### 5. Instagram session (needed for stories)
 
-Log in once with a secondary Instagram account. The session file is written to `backend/secrets/ig-session`:
+Use a secondary Instagram account. Logging in from the container usually triggers an Instagram checkpoint, so reuse the session of a browser that is already logged in instead. Copy the `cookie` request header from instagram.com (DevTools > Network > the `www.instagram.com` document request > Request Headers), then run this and paste it (input is hidden):
 
 ```bash
-docker compose run --rm --no-deps -v ./backend/secrets:/tmp/secrets backend instaloader --login YOUR_IG_USERNAME --sessionfile /tmp/secrets/ig-session
+docker compose run --rm --no-deps -v ./backend/secrets:/tmp/secrets backend python -m app.cli ig-session --out /tmp/secrets/ig-session
 ```
+
+It checks the session with Instagram and prints the username to put in `.env`. Logging in with a password also works when there is no checkpoint: `... backend instaloader --login YOUR_IG_USERNAME --sessionfile /tmp/secrets/ig-session`.
 
 Then set `IG_USERNAME=YOUR_IG_USERNAME` in `backend/.env` and run `docker compose up -d backend worker`.
 
@@ -120,6 +124,8 @@ Login required:
 | `GET /api/folders/{id}/items?type=photo\|video` | Items in a folder |
 | `GET /api/items/{id}/file`, `/thumbnail` | File (supports Range for video seeking, `?download=true` for attachment) |
 | `DELETE /api/folders/{id}`, `DELETE /api/items/{id}` | Delete |
+| `POST /api/folders/{id}/files` | Upload one file (multipart field `file`). Same file twice in one folder is skipped |
+| `POST /api/downloaded/lookup` | `{platform, postIds}` returns the folders that already hold each post |
 
 Errors come back as `{"detail": "..."}`:
 

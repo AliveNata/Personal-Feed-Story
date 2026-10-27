@@ -97,6 +97,60 @@ export const fetchFolderItems = (folderId: number, type: MediaType): Promise<Med
 export const deleteFolder = (folderId: number): Promise<void> =>
   request<void>(`/api/folders/${folderId}`, { method: 'DELETE' });
 
+export interface UploadResult {
+  status: 'saved' | 'skipped';
+  item: MediaItem | null;
+}
+
+/** XHR instead of fetch: fetch has no upload progress events. */
+export const uploadFile = (
+  folderId: number,
+  file: File,
+  onProgress: (fraction: number) => void,
+): Promise<UploadResult> =>
+  new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/folders/${folderId}/files`);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(event.loaded / event.total);
+    };
+    xhr.onload = () => {
+      let body: unknown = null;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch (error) {
+        console.error('upload response was not JSON', error);
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body as UploadResult);
+        return;
+      }
+      const detail =
+        body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string'
+          ? body.detail
+          : xhr.status === 413
+            ? 'File terlalu besar'
+            : `Upload gagal (${xhr.status})`;
+      reject(new ApiError(detail, xhr.status));
+    };
+    xhr.onerror = () => reject(new ApiError('Koneksi ke backend putus', 0));
+    const form = new FormData();
+    form.append('file', file);
+    xhr.send(form);
+  });
+
+export const lookupDownloaded = async (
+  platform: Platform,
+  postIds: string[],
+): Promise<Record<string, string[]>> =>
+  (
+    await request<{ foldersByPost: Record<string, string[]> }>('/api/downloaded/lookup', {
+      method: 'POST',
+      json: { platform, postIds },
+    })
+  ).foldersByPost;
+
 export const deleteItem = (itemId: number): Promise<void> =>
   request<void>(`/api/items/${itemId}`, { method: 'DELETE' });
 

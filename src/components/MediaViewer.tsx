@@ -14,6 +14,12 @@ interface MediaViewerProps {
   onDelete: (item: MediaItem) => Promise<void>;
 }
 
+const SOURCE_LABELS: Record<MediaItem['platform'], string> = {
+  tiktok: 'TikTok',
+  instagram: 'Instagram',
+  upload: 'Upload manual',
+};
+
 const dateFormat = new Intl.DateTimeFormat('id', { dateStyle: 'medium', timeStyle: 'short' });
 
 const MediaViewer: React.FC<MediaViewerProps> = ({
@@ -106,7 +112,8 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
 
         <div className="bg-white p-4">
           <p className="text-sm text-gray-700">
-            @{item.authorUsername} · {item.platform === 'tiktok' ? 'TikTok' : 'Instagram'}
+            {item.platform === 'upload' ? '' : `@${item.authorUsername} · `}
+            {SOURCE_LABELS[item.platform]}
             {item.isStory ? ' story' : ''}
             {item.postedAt ? ` · ${dateFormat.format(new Date(item.postedAt))}` : ''}
             {' · '}

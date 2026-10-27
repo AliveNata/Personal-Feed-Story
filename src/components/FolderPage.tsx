@@ -11,7 +11,8 @@ import {
   formatBytes,
 } from '../utils/api';
 import MediaViewer from './MediaViewer';
-import { ConfirmDelete, Panel, focusRing, primaryButton } from './ui';
+import UploadDialog from './UploadDialog';
+import { ConfirmDelete, Panel, focusRing, primaryButton, secondaryButton } from './ui';
 
 const TABS: { type: MediaType; label: string }[] = [
   { type: 'photo', label: 'Foto' },
@@ -35,6 +36,7 @@ const FolderPage: React.FC = () => {
   const [folderError, setFolderError] = useState<string | null>(null);
   const [items, setItems] = useState<ItemsState>({ status: 'loading' });
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const [isUploadOpen, setIsUploadOpen] = useState(false);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const loadFolder = useCallback(() => {
@@ -116,14 +118,19 @@ const FolderPage: React.FC = () => {
           )}
         </div>
         {folder && (
-          <ConfirmDelete
-            label="Hapus folder"
-            confirmText={`Hapus "${folder.name}" beserta semua isinya?`}
-            onConfirm={async () => {
-              await deleteFolder(folder.id);
-              navigate('/library', { replace: true });
-            }}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className={secondaryButton} onClick={() => setIsUploadOpen(true)}>
+              Tambah file
+            </button>
+            <ConfirmDelete
+              label="Hapus folder"
+              confirmText={`Hapus "${folder.name}" beserta semua isinya?`}
+              onConfirm={async () => {
+                await deleteFolder(folder.id);
+                navigate('/library', { replace: true });
+              }}
+            />
+          </div>
         )}
       </div>
 
@@ -203,6 +210,18 @@ const FolderPage: React.FC = () => {
           </ul>
         )}
       </div>
+
+      {isUploadOpen && folder && (
+        <UploadDialog
+          folderId={folder.id}
+          folderName={folder.name}
+          onClose={() => setIsUploadOpen(false)}
+          onUploaded={() => {
+            loadFolder();
+            loadItems();
+          }}
+        />
+      )}
 
       {viewerIndex !== null && readyItems[viewerIndex] && (
         <MediaViewer

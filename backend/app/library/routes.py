@@ -2,16 +2,17 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from arq.connections import ArqRedis
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_db, require_user
 from app.config import get_settings
-from app.db import DownloadJob, Folder, MediaItem
+from app.db import DownloadJob, Folder, MediaItem, User
 from app.library import service
-from app.library.storage import LibraryStorage
+from app.library.storage import DownloadError, LibraryStorage, content_type_for_upload
 from app.models import CamelModel, Platform
 
 POST_ID_PATTERN = r"^[A-Za-z0-9_-]{1,100}$"
@@ -72,7 +73,7 @@ class FolderResponse(CamelModel):
 class MediaItemResponse(CamelModel):
     id: int
     media_type: Literal["photo", "video"]
-    platform: str
+    platform: Literal["tiktok", "instagram", "upload"]
     author_username: str
     source_post_id: str
     item_index: int
@@ -215,3 +216,79 @@ async def get_item_thumbnail(item_id: int, db: DbSession, storage: Storage) -> F
     return FileResponse(
         path, media_type="image/webp", headers={"Cache-Control": "private, max-age=86400"}
     )
+
+
+class UploadResponse(CamelModel):
+    status: Literal["saved", "skipped"]
+    item: MediaItemResponse | None
+
+
+@router.post("/folders/{folder_id}/files", response_model=UploadResponse, status_code=201)
+async def upload_file(
+    folder_id: int,
+    file: UploadFile,
+    db: DbSession,
+    storage: Storage,
+    user: Annotated[User, Depends(require_user)],
+) -> UploadResponse:
+    if await db.get(Folder, folder_id) is None:
+        raise HTTPException(status_code=404, detail="Folder tidak ditemukan")
+    filename = file.filename or "file"
+    content_type = content_type_for_upload(filename, file.content_type)
+    if content_type is None:
+        raise HTTPException(
+            status_code=415, detail=f"{filename}: tipe file tidak didukung, hanya foto atau video"
+        )
+    try:
+        uploaded = await storage.save_upload(
+            file.read, content_type, get_settings().max_download_bytes
+        )
+    except DownloadError as exc:
+        raise HTTPException(status_code=422, detail=f"{filename}: {exc}") from exc
+
+    item = await service.add_file_to_folder(
+        db,
+        storage,
+        folder_id,
+        uploaded,
+        service.ItemSource(
+            platform="upload",
+            author_username=user.username,
+            # Keyed by content, so uploading the same file twice into a folder is a no-op.
+            source_post_id=f"upload-{uploaded.sha256[:24]}",
+            item_index=0,
+            caption=filename,
+        ),
+    )
+    if item is None:
+        return UploadResponse(status="skipped", item=None)
+    return UploadResponse(status="saved", item=_item_response(item))
+
+
+class DownloadedLookupRequest(CamelModel):
+    platform: Platform
+    post_ids: list[Annotated[str, Field(pattern=POST_ID_PATTERN)]] = Field(max_length=200)
+
+
+class DownloadedLookupResponse(CamelModel):
+    # post id -> names of folders that already hold it
+    folders_by_post: dict[str, list[str]]
+
+
+@router.post("/downloaded/lookup", response_model=DownloadedLookupResponse)
+async def lookup_downloaded(
+    body: DownloadedLookupRequest, db: DbSession
+) -> DownloadedLookupResponse:
+    if not body.post_ids:
+        return DownloadedLookupResponse(folders_by_post={})
+    rows = await db.execute(
+        select(MediaItem.source_post_id, Folder.name)
+        .join(Folder, Folder.id == MediaItem.folder_id)
+        .where(MediaItem.platform == body.platform, MediaItem.source_post_id.in_(body.post_ids))
+        .distinct()
+        .order_by(Folder.name)
+    )
+    folders_by_post: dict[str, list[str]] = {}
+    for post_id, folder_name in rows.all():
+        folders_by_post.setdefault(post_id, []).append(folder_name)
+    return DownloadedLookupResponse(folders_by_post=folders_by_post)

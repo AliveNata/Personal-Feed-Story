@@ -11,6 +11,7 @@ import hashlib
 import logging
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,31 @@ CONTENT_TYPE_EXTENSIONS = {
     "video/quicktime": "mov",
     "video/webm": "webm",
 }
+
+
+# Upload type comes from the file extension: browsers send unreliable MIME types for
+# some formats (e.g. empty for .heic on Windows).
+EXTENSION_CONTENT_TYPES = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+    "heic": "image/heic",
+    "avif": "image/avif",
+    "mp4": "video/mp4",
+    "m4v": "video/mp4",
+    "mov": "video/quicktime",
+    "webm": "video/webm",
+}
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+def content_type_for_upload(filename: str, declared: str | None) -> str | None:
+    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if extension in EXTENSION_CONTENT_TYPES:
+        return EXTENSION_CONTENT_TYPES[extension]
+    declared_clean = (declared or "").split(";")[0].strip().lower()
+    return declared_clean if declared_clean in CONTENT_TYPE_EXTENSIONS else None
 
 
 class DownloadError(Exception):
@@ -111,6 +137,35 @@ class LibraryStorage:
             temp_path.unlink(missing_ok=True)
             raise
         return DownloadedFile(temp_path, digest.hexdigest(), content_type, size)
+
+    async def save_upload(
+        self, read_chunk: Callable[[int], Awaitable[bytes]], content_type: str, max_bytes: int
+    ) -> DownloadedFile:
+        """Stream an uploaded file to tmp while hashing it, same result shape as a download."""
+        temp_path = self.root / "tmp" / uuid.uuid4().hex
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with temp_path.open("wb") as file:
+                while chunk := await read_chunk(UPLOAD_CHUNK_BYTES):
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise DownloadError("File melebihi batas ukuran upload")
+                    digest.update(chunk)
+                    file.write(chunk)
+        except DownloadError:
+            temp_path.unlink(missing_ok=True)
+            raise
+        if size == 0:
+            temp_path.unlink(missing_ok=True)
+            raise DownloadError("File kosong")
+        downloaded = DownloadedFile(temp_path, digest.hexdigest(), content_type, size)
+        if downloaded.media_type == "photo" and content_type != "image/heic":
+            ok = await asyncio.to_thread(_is_valid_image, temp_path)
+            if not ok:
+                temp_path.unlink(missing_ok=True)
+                raise DownloadError("File bukan gambar yang valid")
+        return downloaded
 
     async def store(self, downloaded: DownloadedFile) -> StoredFile:
         """Move a download into the blob store. Caller has already checked the sha is new."""
@@ -195,6 +250,15 @@ class LibraryStorage:
                 return True
         logger.warning("video thumbnail failed for %s", source)
         return False
+
+
+def _is_valid_image(path: Path) -> bool:
+    try:
+        with Image.open(path) as image:
+            image.verify()
+    except (UnidentifiedImageError, OSError):
+        return False
+    return True
 
 
 def _photo_thumbnail(source: Path, target: Path) -> bool:

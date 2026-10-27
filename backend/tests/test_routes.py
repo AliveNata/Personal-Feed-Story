@@ -185,3 +185,107 @@ async def test_download_rejects_blank_folder_and_bad_post_id(client: httpx.Async
 
     # Assert
     assert (blank.status_code, bad_id.status_code) == (422, 422)
+
+
+async def _create_folder(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> int:
+    from app.library import service
+
+    async with session_factory() as db:
+        folder = await service.get_or_create_folder(db, "Upload")
+        await db.commit()
+        return folder.id
+
+
+def _jpeg_bytes(color: str) -> bytes:
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 32), color).save(buffer, "JPEG")
+    return buffer.getvalue()
+
+
+async def test_upload_sorts_by_type_and_skips_duplicates(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    # Arrange
+    await login(client)
+    folder_id = await _create_folder(client, session_factory)
+    photo = _jpeg_bytes("green")
+    url = f"/api/folders/{folder_id}/files"
+
+    # Act
+    first = await client.post(url, files={"file": ("liburan.JPG", photo, "image/jpeg")})
+    again = await client.post(url, files={"file": ("copy.jpg", photo, "image/jpeg")})
+    fake_image = await client.post(
+        url, files={"file": ("rusak.jpg", b"not an image", "image/jpeg")}
+    )
+    unsupported = await client.post(url, files={"file": ("notes.pdf", b"%PDF", "application/pdf")})
+    photos = (await client.get(f"/api/folders/{folder_id}/items?type=photo")).json()
+
+    # Assert
+    assert first.status_code == 201
+    assert first.json()["status"] == "saved"
+    assert first.json()["item"]["platform"] == "upload"
+    assert first.json()["item"]["caption"] == "liburan.JPG"
+    assert again.json() == {"status": "skipped", "item": None}
+    assert (fake_image.status_code, unsupported.status_code) == (422, 415)
+    assert len(photos) == 1
+
+
+async def test_upload_requires_login(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    # Arrange
+    folder_id = await _create_folder(client, session_factory)
+
+    # Act
+    response = await client.post(
+        f"/api/folders/{folder_id}/files",
+        files={"file": ("a.jpg", _jpeg_bytes("red"), "image/jpeg")},
+    )
+
+    # Assert
+    assert response.status_code == 401
+
+
+async def test_downloaded_lookup_lists_folders_per_post(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    # Arrange
+    await login(client)
+    for folder_name in ("B", "A"):
+        job = (
+            await client.post(
+                "/api/downloads",
+                json={
+                    "folderName": folder_name,
+                    "platform": "instagram",
+                    "username": "x",
+                    "postIds": ["p1"],
+                },
+            )
+        ).json()
+        await JobRunner(
+            session_factory,
+            {"instagram": FakeResolver({"p1": [PHOTO_URL_BLUE]})},
+            app.state.storage,
+            {},
+            10_000_000,
+            no_sleep,
+        ).run(job["id"])
+
+    # Act
+    response = await client.post(
+        "/api/downloaded/lookup", json={"platform": "instagram", "postIds": ["p1", "p2"]}
+    )
+    other_platform = await client.post(
+        "/api/downloaded/lookup", json={"platform": "tiktok", "postIds": ["p1"]}
+    )
+
+    # Assert
+    assert response.json() == {"foldersByPost": {"p1": ["A", "B"]}}
+    assert other_platform.json() == {"foldersByPost": {}}

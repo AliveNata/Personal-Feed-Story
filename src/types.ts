@@ -51,7 +51,7 @@ export interface Folder {
 export interface MediaItem {
   id: number;
   mediaType: MediaType;
-  platform: Platform;
+  platform: Platform | 'upload';
   authorUsername: string;
   sourcePostId: string;
   itemIndex: number;

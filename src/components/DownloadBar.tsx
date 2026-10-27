@@ -9,6 +9,7 @@ interface DownloadBarProps {
   username: string;
   selectedIds: string[];
   onClearSelection: () => void;
+  onJobFinished: () => void;
 }
 
 const JOB_POLL_MS = 2000;
@@ -32,6 +33,7 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
   username,
   selectedIds,
   onClearSelection,
+  onJobFinished,
 }) => {
   const [folderName, setFolderName] = useState('');
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -44,6 +46,13 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
       .then(setFolders)
       .catch((caught: unknown) => console.error('fetchFolders failed', caught));
   }, [job?.status]);
+
+  const jobStatus = job?.status;
+  useEffect(() => {
+    if (jobStatus === 'done' || jobStatus === 'failed') {
+      onJobFinished();
+    }
+  }, [jobStatus, onJobFinished]);
 
   useEffect(() => {
     if (!job || job.status === 'done' || job.status === 'failed') {
