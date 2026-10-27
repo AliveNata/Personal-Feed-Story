@@ -1,8 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Heart, MessageCircle, Share2 } from 'lucide-react';
-import { Platform, Post, User } from '../types';
+import { useAuth } from '../auth/AuthContext';
+import { Platform, Post } from '../types';
 import { formatRelativeTime } from '../utils/api';
+import DownloadBar from './DownloadBar';
+import SelectToggle from './SelectToggle';
 import Story from './Story';
+import { focusRing, secondaryButton } from './ui';
 
 export type FeedStatus = 'idle' | 'loading' | 'success' | 'error';
 
@@ -13,7 +18,6 @@ interface FeedProps {
   username: string;
   errorMessage: string | null;
   cached: boolean;
-  user: User;
   onRetry: () => void;
 }
 
@@ -47,10 +51,27 @@ const Feed: React.FC<FeedProps> = ({
   username,
   errorMessage,
   cached,
-  user,
   onRetry,
 }) => {
   const platformLabel = platform === 'instagram' ? 'Instagram' : 'TikTok';
+  const { user } = useAuth();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // A new feed means new post ids, so an old selection would point at nothing.
+  useEffect(() => {
+    setSelected(new Set());
+  }, [posts]);
+
+  const toggle = (id: string) =>
+    setSelected((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
 
   if (status === 'idle') {
     return (
@@ -95,19 +116,45 @@ const Feed: React.FC<FeedProps> = ({
     );
   }
 
+  const allSelected = selected.size === posts.length;
+
   return (
-    <div>
-      <p className="text-sm text-gray-700 mb-4">
-        {platformLabel} @{username}, {posts.length} item
-        {cached ? ' (dari cache)' : ''}
-      </p>
+    <div className={user ? 'pb-48 md:pb-32' : ''}>
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <p className="text-sm text-gray-700">
+          {platformLabel} @{username}, {posts.length} item
+          {cached ? ' (dari cache)' : ''}
+        </p>
+        {user ? (
+          <button
+            type="button"
+            className={`ml-auto ${secondaryButton}`}
+            onClick={() => setSelected(allSelected ? new Set() : new Set(posts.map((post) => post.id)))}
+          >
+            {allSelected ? 'Batal pilih semua' : 'Pilih semua'}
+          </button>
+        ) : (
+          <p className="ml-auto text-sm text-gray-700">
+            <Link to="/login?next=/" className={`underline text-gray-900 ${focusRing}`}>
+              Login
+            </Link>{' '}
+            untuk download post ke Library.
+          </p>
+        )}
+      </div>
 
       {stories.length > 0 && (
         <div className="mb-8">
           <h2 className="text-2xl font-bold mb-4">Stories</h2>
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-4">
             {stories.map((story) => (
-              <Story key={story.id} story={story} user={user} />
+              <Story
+                key={story.id}
+                story={story}
+                isSelectable={user !== null}
+                isSelected={selected.has(story.id)}
+                onToggle={toggle}
+              />
             ))}
           </div>
         </div>
@@ -116,7 +163,19 @@ const Feed: React.FC<FeedProps> = ({
       <h2 className="text-2xl font-bold mb-4">Feed</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         {regularPosts.map((post) => (
-          <article key={post.id} className="bg-white rounded-lg shadow-md overflow-hidden flex flex-col">
+          <article
+            key={post.id}
+            className={`relative bg-white rounded-lg shadow-md overflow-hidden flex flex-col ${
+              selected.has(post.id) ? 'ring-4 ring-gray-900' : ''
+            }`}
+          >
+            {user && (
+              <SelectToggle
+                isSelected={selected.has(post.id)}
+                label={`Pilih post ${post.caption.slice(0, 40) || post.id}`}
+                onToggle={() => toggle(post.id)}
+              />
+            )}
             {post.permalink ? (
               <a
                 href={post.permalink}
@@ -155,6 +214,15 @@ const Feed: React.FC<FeedProps> = ({
           </article>
         ))}
       </div>
+
+      {user && (
+        <DownloadBar
+          platform={platform}
+          username={username}
+          selectedIds={posts.filter((post) => selected.has(post.id)).map((post) => post.id)}
+          onClearSelection={() => setSelected(new Set())}
+        />
+      )}
     </div>
   );
 };

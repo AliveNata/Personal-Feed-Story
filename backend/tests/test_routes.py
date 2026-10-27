@@ -114,9 +114,9 @@ async def test_login_me_logout(client: httpx.AsyncClient) -> None:
     me_after = await client.get("/api/auth/me")
 
     # Assert
-    assert me.json() == {"username": "aliv"}
+    assert me.json() == {"user": {"username": "aliv"}}
     assert logout.status_code == 204
-    assert me_after.status_code == 401
+    assert me_after.json() == {"user": None}
 
 
 async def test_download_flow_list_serve_and_delete(

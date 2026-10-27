@@ -1,62 +1,86 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
+import { useAuth } from '../auth/AuthContext';
+import { ApiError } from '../utils/api';
+import { focusRing } from './ui';
 
-interface LoginProps {
-  onLogin: (success: boolean) => void;
-}
-
-const Login: React.FC<LoginProps> = ({ onLogin }) => {
+const Login: React.FC = () => {
+  const { user, login } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const next = searchParams.get('next') ?? '/library';
+  // Only same-app paths, so ?next= cannot bounce the user to another site.
+  const safeNext = next.startsWith('/') && !next.startsWith('//') ? next : '/library';
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (username === 'admin' && password === 'password') {
-      onLogin(true);
-      navigate('/dashboard');
-    } else {
-      setError('Invalid username or password');
+  if (user) {
+    return <Navigate to={safeNext} replace />;
+  }
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      await login(username, password);
+      navigate(safeNext, { replace: true });
+    } catch (caught) {
+      console.error('login failed', caught);
+      setError(caught instanceof ApiError ? caught.message : 'Backend tidak bisa dihubungi');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
+  const inputClass = `w-full min-h-[44px] px-3 border border-gray-300 rounded-md text-gray-900 ${focusRing}`;
+
   return (
     <div className="max-w-md mx-auto bg-white p-8 rounded-lg shadow-md">
-      <h2 className="text-2xl font-bold mb-6 text-center">Login</h2>
-      <form onSubmit={handleSubmit}>
-        <div className="mb-4">
-          <label htmlFor="username" className="block text-gray-700 font-bold mb-2">
+      <h2 className="text-2xl font-bold mb-2">Login</h2>
+      <p className="text-gray-700 mb-6">Login untuk download post dan buka Library.</p>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <div>
+          <label htmlFor="login-username" className="block text-sm font-semibold text-gray-700 mb-1">
             Username
           </label>
           <input
+            id="login-username"
             type="text"
-            id="username"
+            autoComplete="username"
             value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            onChange={(event) => setUsername(event.target.value)}
+            className={inputClass}
             required
           />
         </div>
-        <div className="mb-6">
-          <label htmlFor="password" className="block text-gray-700 font-bold mb-2">
+        <div>
+          <label htmlFor="login-password" className="block text-sm font-semibold text-gray-700 mb-1">
             Password
           </label>
           <input
+            id="login-password"
             type="password"
-            id="password"
+            autoComplete="current-password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            onChange={(event) => setPassword(event.target.value)}
+            className={inputClass}
             required
           />
         </div>
-        {error && <p className="text-red-500 mb-4">{error}</p>}
+        {error && (
+          <p role="alert" className="text-red-700">
+            {error}
+          </p>
+        )}
         <button
           type="submit"
-          className="w-full bg-blue-500 text-white font-bold py-2 px-4 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          disabled={isSubmitting}
+          className={`min-h-[44px] rounded-md bg-gray-900 text-white font-semibold hover:bg-gray-700 disabled:opacity-60 ${focusRing}`}
         >
-          Login
+          {isSubmitting ? 'Masuk...' : 'Masuk'}
         </button>
       </form>
     </div>

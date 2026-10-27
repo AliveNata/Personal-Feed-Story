@@ -1,4 +1,12 @@
-import { FeedResponse, Platform, Post, User } from '../types';
+import {
+  DownloadJob,
+  FeedResponse,
+  Folder,
+  MediaItem,
+  MediaType,
+  Platform,
+  User,
+} from '../types';
 
 export class ApiError extends Error {
   constructor(
@@ -10,7 +18,45 @@ export class ApiError extends Error {
   }
 }
 
-export const fetchFeed = async (
+const errorDetail = async (response: Response): Promise<string> => {
+  const body: unknown = await response.json().catch(() => null);
+  if (body && typeof body === 'object' && 'detail' in body) {
+    const { detail } = body as { detail: unknown };
+    if (typeof detail === 'string') {
+      return detail;
+    }
+    // FastAPI validation errors come back as a list of {msg} objects.
+    if (Array.isArray(detail) && detail[0] && typeof detail[0].msg === 'string') {
+      return detail[0].msg;
+    }
+  }
+  // Vite's proxy answers an empty 500 when the backend is down, so cover both cases.
+  return response.status === 500
+    ? 'Backend mati atau error. Cek terminal docker compose up.'
+    : `Request gagal (${response.status})`;
+};
+
+const request = async <T>(
+  path: string,
+  init: RequestInit & { json?: unknown } = {},
+): Promise<T> => {
+  const { json, ...rest } = init;
+  const response = await fetch(path, {
+    ...rest,
+    headers: json === undefined ? rest.headers : { 'Content-Type': 'application/json' },
+    body: json === undefined ? rest.body : JSON.stringify(json),
+    credentials: 'same-origin',
+  });
+  if (!response.ok) {
+    throw new ApiError(await errorDetail(response), response.status);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return (await response.json()) as T;
+};
+
+export const fetchFeed = (
   platform: Platform,
   username: string,
   options: { refresh?: boolean; signal?: AbortSignal } = {},
@@ -19,21 +65,40 @@ export const fetchFeed = async (
   if (options.refresh) {
     params.set('refresh', 'true');
   }
-
-  const response = await fetch(`/api/feed?${params.toString()}`, { signal: options.signal });
-  if (!response.ok) {
-    const body: unknown = await response.json().catch(() => null);
-    const detail =
-      body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string'
-        ? body.detail
-        : // Vite's proxy answers an empty 500 when the backend is down, so cover both cases.
-          response.status === 500
-          ? 'Backend mati atau error. Cek terminal docker compose up.'
-          : `Request gagal (${response.status})`;
-    throw new ApiError(detail, response.status);
-  }
-  return (await response.json()) as FeedResponse;
+  return request<FeedResponse>(`/api/feed?${params.toString()}`, { signal: options.signal });
 };
+
+export const fetchMe = async (): Promise<User | null> =>
+  (await request<{ user: User | null }>('/api/auth/me')).user;
+
+export const login = (username: string, password: string): Promise<User> =>
+  request<User>('/api/auth/login', { method: 'POST', json: { username, password } });
+
+export const logout = (): Promise<void> => request<void>('/api/auth/logout', { method: 'POST' });
+
+export const createDownload = (body: {
+  folderName: string;
+  platform: Platform;
+  username: string;
+  postIds: string[];
+}): Promise<DownloadJob> => request<DownloadJob>('/api/downloads', { method: 'POST', json: body });
+
+export const fetchJob = (jobId: string): Promise<DownloadJob> =>
+  request<DownloadJob>(`/api/jobs/${encodeURIComponent(jobId)}`);
+
+export const fetchFolders = (): Promise<Folder[]> => request<Folder[]>('/api/folders');
+
+export const fetchFolder = (folderId: number): Promise<Folder> =>
+  request<Folder>(`/api/folders/${folderId}`);
+
+export const fetchFolderItems = (folderId: number, type: MediaType): Promise<MediaItem[]> =>
+  request<MediaItem[]>(`/api/folders/${folderId}/items?type=${type}`);
+
+export const deleteFolder = (folderId: number): Promise<void> =>
+  request<void>(`/api/folders/${folderId}`, { method: 'DELETE' });
+
+export const deleteItem = (itemId: number): Promise<void> =>
+  request<void>(`/api/items/${itemId}`, { method: 'DELETE' });
 
 const relativeTimeFormat = new Intl.RelativeTimeFormat('id', { numeric: 'auto' });
 const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
@@ -54,18 +119,14 @@ export const formatRelativeTime = (isoDate: string, now: Date = new Date()): str
   return relativeTimeFormat.format(0, 'minute');
 };
 
-// Login and Google Drive are still mocked: out of scope for the scraper backend.
-const mockUser: User = {
-  email: 'user@example.com',
-};
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
 
-export const fetchUser = async (): Promise<User> => {
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  return mockUser;
-};
-
-export const saveStoryToGDrive = async (story: Post, email: string): Promise<boolean> => {
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  console.log(`Saving story ${story.id} to Google Drive for ${email}`);
-  return true;
+export const formatBytes = (bytes: number): string => {
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toLocaleString('id', { maximumFractionDigits: unit === 0 ? 0 : 1 })} ${BYTE_UNITS[unit]}`;
 };

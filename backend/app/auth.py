@@ -153,6 +153,11 @@ async def logout(
     response.delete_cookie(SESSION_COOKIE, path="/")
 
 
-@router.get("/me", response_model=UserResponse)
-async def me(user: Annotated[User, Depends(require_user)]) -> UserResponse:
-    return UserResponse(username=user.username)
+class SessionResponse(CamelModel):
+    user: UserResponse | None
+
+
+@router.get("/me", response_model=SessionResponse)
+async def me(user: Annotated[User | None, Depends(current_user)]) -> SessionResponse:
+    # 200 with user=null for guests: being logged out is a normal state, not an error.
+    return SessionResponse(user=UserResponse(username=user.username) if user else None)

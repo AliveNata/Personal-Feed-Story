@@ -21,5 +21,45 @@ export interface FeedResponse {
 }
 
 export interface User {
-  email: string;
+  username: string;
+}
+
+export type MediaType = 'photo' | 'video';
+export type JobStatus = 'queued' | 'running' | 'done' | 'failed';
+
+export interface DownloadJob {
+  id: string;
+  folderId: number;
+  status: JobStatus;
+  totalPosts: number;
+  donePosts: number;
+  failedPosts: number;
+  savedItems: number;
+  skippedItems: number;
+  errors: { postId: string; message: string }[];
+}
+
+export interface Folder {
+  id: number;
+  name: string;
+  photoCount: number;
+  videoCount: number;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+export interface MediaItem {
+  id: number;
+  mediaType: MediaType;
+  platform: Platform;
+  authorUsername: string;
+  sourcePostId: string;
+  itemIndex: number;
+  isStory: boolean;
+  caption: string;
+  permalink: string | null;
+  postedAt: string | null;
+  sizeBytes: number;
+  fileUrl: string;
+  thumbnailUrl: string | null;
 }
