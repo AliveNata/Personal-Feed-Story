@@ -46,6 +46,14 @@ mkdir -p backend/secrets douk/volume
 cp douk/settings.example.json douk/volume/settings.json
 ```
 
+Windows PowerShell:
+
+```powershell
+copy backend\.env.example backend\.env
+mkdir backend\secrets, douk\volume -Force
+copy douk\settings.example.json douk\volume\settings.json
+```
+
 Fill `TIKTOK_COOKIE` in `backend/.env` (DevTools > Network > any request to tiktok.com > `Cookie` header). Use a secondary account.
 
 Leave `IG_USERNAME` empty until you set up the Instagram session (step 5).
@@ -93,6 +101,65 @@ It checks the session with Instagram and prints the username to put in `.env`. L
 Then set `IG_USERNAME=YOUR_IG_USERNAME` in `backend/.env` and run `docker compose up -d backend worker`.
 
 Backend API docs: http://127.0.0.1:8000/docs
+
+## Daily use
+
+Setup above is a one time thing. After that, all commands run from the repo root.
+
+Start:
+
+```bash
+docker compose up -d
+npm run dev
+```
+
+Open http://localhost:5173. `npm run dev` keeps the terminal busy, leave it open.
+
+Stop:
+
+```bash
+# Ctrl+C in the npm run dev terminal, then
+docker compose down
+```
+
+`docker compose down` keeps the data: Postgres lives in the `pgdata` volume and files in `./data/library`. Never add `-v`, that deletes the database.
+
+After `git pull`:
+
+1. Stop `npm run dev` first, so Vite does not serve half updated files.
+2. Run `git pull`.
+3. If anything under `backend/` changed, run `docker compose up -d --build backend worker`.
+4. If `package.json` changed, run `npm install`.
+5. Run `npm run dev`, then hard refresh the browser with Ctrl+Shift+R.
+
+Check what is running and read logs:
+
+```bash
+docker compose ps
+docker compose logs backend --tail 50
+docker compose logs worker --tail 50
+```
+
+After editing `backend/.env` (new cookie, `IG_USERNAME`):
+
+```bash
+docker compose up -d backend worker
+```
+
+`up -d` recreates the containers with the new env. `restart` does not reload `.env`.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| "Backend mati atau error", or Vite logs `ECONNREFUSED` on `/api` | The stack is not up. Run `docker compose up -d` and check `docker compose ps`. |
+| TikTok answers 403 | `TIKTOK_COOKIE` expired or is empty. Copy a fresh `Cookie` request header (not `Set-Cookie`) into `backend/.env`, then `docker compose up -d backend worker`. |
+| Instagram stories missing, or "login" errors | The IG session expired. Repeat step 5. |
+| Feed shows "(dari cache)" with old data | Click "Scrape ulang". |
+| Covers or photos stop loading | CDN links expired. Click "Scrape ulang". |
+| "tunggu sekitar N menit" | The request budget is used up. Wait, scraping again too soon risks the account. |
+| Blank page or `does not provide an export named` after a pull | Stop Vite, run `npm run dev -- --force`, hard refresh. |
+| UI change not visible after a pull | Same as above. Check `git log --oneline -1` matches GitHub. |
 
 ## Backend development
 
