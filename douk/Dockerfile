@@ -20,6 +20,7 @@ COPY --from=builder /src/locale /app/locale
 COPY --from=builder /src/static /app/static
 COPY --from=builder /src/license /app/license
 COPY --from=builder /src/main.py /app/main.py
+COPY user_route.py /app/user_route.py
 EXPOSE 5555
 VOLUME /app/Volume
-CMD ["python", "main.py"]
+CMD ["python", "user_route.py"]

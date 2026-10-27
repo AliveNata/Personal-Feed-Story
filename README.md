@@ -13,7 +13,7 @@ browser -> vite dev server (/api proxy) -> backend (FastAPI :8000)
 
 | Part | Source | Notes |
 |---|---|---|
-| TikTok | [DouK-Downloader](https://github.com/JoeanAmier/TikTokDownloader) 5.8, built by `douk/Dockerfile` from the git tag | Needs a TikTok cookie. Username is resolved to `secUid` by reading the profile page. You can also pass a `secUid` (starts with `MS4wLjABAAAA`) directly as the username. |
+| TikTok | [DouK-Downloader](https://github.com/JoeanAmier/TikTokDownloader) 5.8, built by `douk/Dockerfile` from the git tag | Needs a TikTok cookie. Username is resolved to `secUid` through `POST /tiktok/user`, a route `douk/user_route.py` adds to DouK (profile HTML scraping gets a WAF challenge). You can also pass a `secUid` (starts with `MS4wLjABAAAA`) directly as the username. |
 | Instagram | [instaloader](https://github.com/instaloader/instaloader) | Posts work without login but the rate limit is tight. Stories need a session file. |
 | Media | `GET /api/media?url=` | Proxies covers because the IG and TikTok CDNs block hotlinking. Only CDN hosts on the allowlist in `backend/app/media.py` are accepted. |
 
