@@ -186,8 +186,8 @@ class BudgetRateController(RateController):
 
     def handle_429(self, query_type: str) -> None:
         # Instaloader would sleep here for many minutes. Fail fast and remember the cooldown.
-        self._budget.cooldown(PLATFORM, COOLDOWN_AFTER_429_SECONDS)
-        raise TooManyRequestsException(wait_message(COOLDOWN_AFTER_429_SECONDS))
+        seconds = self._budget.throttled(PLATFORM, COOLDOWN_AFTER_429_SECONDS)
+        raise TooManyRequestsException(wait_message(seconds))
 
 
 def build_loader(
@@ -420,23 +420,27 @@ class InstagramSource:
         except AbortDownloadException as exc:
             # Raised for 400 "feedback_required" and similar: Instagram is limiting this account.
             logger.error("instagram aborted the request: %s", exc)
-            if self._budget is not None:
-                self._budget.cooldown(PLATFORM, COOLDOWN_AFTER_FEEDBACK_SECONDS)
+            seconds = (
+                self._budget.throttled(PLATFORM, COOLDOWN_AFTER_FEEDBACK_SECONDS)
+                if self._budget is not None
+                else COOLDOWN_AFTER_FEEDBACK_SECONDS
+            )
             raise RateLimitedError(
                 "Instagram membatasi akun ini (feedback_required). Istirahat dulu sekitar "
-                f"{COOLDOWN_AFTER_FEEDBACK_SECONDS // 60} menit, lalu coba lagi pelan pelan",
-                retry_after=COOLDOWN_AFTER_FEEDBACK_SECONDS,
+                f"{math.ceil(seconds / 60)} menit, lalu coba lagi pelan pelan",
+                retry_after=seconds,
             ) from exc
         except QueryReturnedForbiddenException as exc:
             raise UpstreamError("Instagram menolak request (403), cek session") from exc
         except ConnectionException as exc:
             logger.error("instagram request failed: %s", exc)
             if _is_throttle(exc):
-                if self._budget is not None:
-                    self._budget.cooldown(PLATFORM, COOLDOWN_AFTER_429_SECONDS)
-                raise RateLimitedError(
-                    wait_message(COOLDOWN_AFTER_429_SECONDS), retry_after=COOLDOWN_AFTER_429_SECONDS
-                ) from exc
+                seconds = (
+                    self._budget.throttled(PLATFORM, COOLDOWN_AFTER_429_SECONDS)
+                    if self._budget is not None
+                    else COOLDOWN_AFTER_429_SECONDS
+                )
+                raise RateLimitedError(wait_message(seconds), retry_after=seconds) from exc
             raise UpstreamError("Gagal mengambil data Instagram") from exc
 
     # Any, like instaloader's own untyped returns: its Post class does not match our Protocols.
@@ -463,7 +467,7 @@ class InstagramSource:
                     # A limited session is also why the page came back empty, so this is a
                     # rate limit, not a missing account.
                     if self._budget is not None:
-                        self._budget.cooldown(PLATFORM, COOLDOWN_AFTER_429_SECONDS)
+                        self._budget.throttled(PLATFORM, COOLDOWN_AFTER_429_SECONDS)
                     raise TooManyRequestsException(str(api_error)) from api_error
                 raise page_error from api_error
             user = (data.get("data") or {}).get("user")

@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 # Show the "slow down" notice once this share of the budget is used.
 NEAR_LIMIT_RATIO = 0.8
+# Platforms keep a block for longer than our first guess when it is hit again, so every
+# throttle within STRIKE_MEMORY_SECONDS doubles the wait, up to MAX_THROTTLE_SECONDS.
+STRIKE_MEMORY_SECONDS = 6 * 60 * 60
+MAX_THROTTLE_SECONDS = 4 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -117,6 +121,20 @@ class RateBudget:
             self._redis.expire(hits_key, window)
         except RedisError as exc:
             logger.warning("rate budget record failed for %s: %s", platform, exc)
+
+    def throttled(self, platform: str, base_seconds: int) -> int:
+        """The platform said "slow down": cool down, longer on each repeat. Returns the wait."""
+        strikes_key = f"ratebudget:{platform}:strikes"
+        try:
+            strikes = int(self._redis.incr(strikes_key))  # type: ignore[arg-type]
+            self._redis.expire(strikes_key, STRIKE_MEMORY_SECONDS)
+        except RedisError as exc:
+            logger.warning("rate budget strike count failed for %s: %s", platform, exc)
+            strikes = 1
+        seconds = int(min(base_seconds * 2 ** (strikes - 1), MAX_THROTTLE_SECONDS))
+        logger.warning("%s throttled, strike %d", platform, strikes)
+        self.cooldown(platform, seconds)
+        return seconds
 
     def cooldown(self, platform: str, seconds: int) -> None:
         _, cooldown_key = self._keys(platform)

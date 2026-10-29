@@ -67,3 +67,15 @@ def test_wait_for_share_waits_until_old_hits_expire() -> None:
 
     # Assert
     assert 0 < wait <= 900
+
+
+def test_repeated_throttles_double_the_cooldown_up_to_a_cap() -> None:
+    # Arrange
+    budget = make_budget()
+
+    # Act
+    waits = [budget.throttled("instagram", 900) for _ in range(6)]
+
+    # Assert
+    assert waits == [900, 1800, 3600, 7200, 14400, 14400]
+    assert budget.status("instagram").wait_seconds > 7200
