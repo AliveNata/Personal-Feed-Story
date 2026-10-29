@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Highlight, Post } from '../types';
 import { ApiError, fetchHighlightItems, fetchHighlights } from '../utils/api';
 import Story from './Story';
+import { SectionSelectAll } from './DownloadStatus';
+import { ItemDownloadState } from './downloadState';
 import { focusRing, secondaryButton } from './ui';
 
 interface HighlightsProps {
@@ -9,7 +11,11 @@ interface HighlightsProps {
   isSelectable: boolean;
   selected: Set<string>;
   savedIn: Record<string, string[]>;
+  downloadStates: Record<string, ItemDownloadState>;
+  isLocked: (id: string) => boolean;
+  isPending: (id: string) => boolean;
   onToggle: (id: string) => void;
+  onSelectMany: (ids: string[], select: boolean) => void;
   onItemsLoaded: (items: Post[]) => void;
 }
 
@@ -58,7 +64,11 @@ const Highlights: React.FC<HighlightsProps> = ({
   isSelectable,
   selected,
   savedIn,
+  downloadStates,
+  isLocked,
+  isPending,
   onToggle,
+  onSelectMany,
   onItemsLoaded,
 }) => {
   const [list, setList] = useState<ListState>({ status: 'idle' });
@@ -166,9 +176,21 @@ const Highlights: React.FC<HighlightsProps> = ({
       )}
       {items.status === 'ready' && items.items.length > 0 && (
         <div className="mt-4">
-          <p className="mb-2 text-sm text-gray-700">
-            {items.highlight.title}, {items.items.length} item
-          </p>
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <p className="text-sm text-gray-700">
+              {items.highlight.title}, {items.items.length} item
+            </p>
+            {isSelectable && (
+              <SectionSelectAll
+                ids={items.items.map((item) => item.id)}
+                selected={selected}
+                isLocked={isLocked}
+                isPending={isPending}
+                noun="highlight"
+                onChange={onSelectMany}
+              />
+            )}
+          </div>
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-4">
             {items.items.map((item) => (
               <Story
@@ -177,6 +199,7 @@ const Highlights: React.FC<HighlightsProps> = ({
                 isSelectable={isSelectable}
                 isSelected={selected.has(item.id)}
                 savedFolders={savedIn[item.id]}
+                downloadState={downloadStates[item.id]}
                 onToggle={onToggle}
               />
             ))}

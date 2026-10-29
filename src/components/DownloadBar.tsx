@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DownloadJob, Folder, Platform } from '../types';
 import { ApiError, createDownload, fetchFolders, fetchJob } from '../utils/api';
+import { TrackedJob } from './downloadState';
 import { focusRing, primaryButton, secondaryButton } from './ui';
 
 interface DownloadBarProps {
@@ -10,6 +11,8 @@ interface DownloadBarProps {
   selectedIds: string[];
   onClearSelection: () => void;
   onJobFinished: () => void;
+  // Every poll result, so the cards can show which post is downloading. null when closed.
+  onJobUpdate: (tracked: TrackedJob | null) => void;
 }
 
 const JOB_POLL_MS = 2000;
@@ -34,10 +37,12 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
   selectedIds,
   onClearSelection,
   onJobFinished,
+  onJobUpdate,
 }) => {
   const [folderName, setFolderName] = useState('');
   const [folders, setFolders] = useState<Folder[]>([]);
   const [job, setJob] = useState<DownloadJob | null>(null);
+  const [jobPostIds, setJobPostIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -46,6 +51,10 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
       .then(setFolders)
       .catch((caught: unknown) => console.error('fetchFolders failed', caught));
   }, [job?.status]);
+
+  useEffect(() => {
+    onJobUpdate(job ? { job, postIds: jobPostIds } : null);
+  }, [job, jobPostIds, onJobUpdate]);
 
   const jobStatus = job?.status;
   useEffect(() => {
@@ -85,6 +94,7 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
         username,
         postIds: selectedIds,
       });
+      setJobPostIds(selectedIds);
       setJob(created);
       onClearSelection();
     } catch (caught) {

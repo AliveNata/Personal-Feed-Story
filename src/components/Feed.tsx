@@ -12,7 +12,9 @@ import PostCarousel from './PostCarousel';
 import RateNotice from './RateNotice';
 import SelectToggle from './SelectToggle';
 import Story from './Story';
-import { focusRing, primaryButton, secondaryButton } from './ui';
+import { DownloadOverlay, SectionSelectAll } from './DownloadStatus';
+import { TrackedJob, downloadStates as toDownloadStates, isBusy } from './downloadState';
+import { focusRing, primaryButton } from './ui';
 
 export type FeedStatus = 'idle' | 'loading' | 'success' | 'error';
 
@@ -67,6 +69,7 @@ const Feed: React.FC<FeedProps> = ({
 
   // Every post, story and highlight item seen for this account, to refresh their saved state.
   const knownItems = useRef<Map<string, Post>>(new Map());
+  const [trackedJob, setTrackedJob] = useState<TrackedJob | null>(null);
 
   // A different account means different post ids, so old state would point at nothing.
   useEffect(() => {
@@ -106,6 +109,19 @@ const Feed: React.FC<FeedProps> = ({
     () => lookupSaved(Array.from(knownItems.current.values())),
     [lookupSaved],
   );
+
+  // Each finished post turns grey right away instead of waiting for the whole job.
+  const finishedPosts = trackedJob ? trackedJob.job.donePosts : 0;
+  useEffect(() => {
+    if (finishedPosts > 0) refreshAllSaved();
+  }, [finishedPosts, refreshAllSaved]);
+
+  const selectMany = (ids: string[], select: boolean) =>
+    setSelected((previous) => {
+      const next = new Set(previous);
+      ids.forEach((id) => (select ? next.add(id) : next.delete(id)));
+      return next;
+    });
 
   const toggle = (id: string) =>
     setSelected((previous) => {
@@ -148,8 +164,9 @@ const Feed: React.FC<FeedProps> = ({
 
   const stories = posts.filter((post) => post.isStory);
   const regularPosts = posts.filter((post) => !post.isStory);
-  const selectableIds = posts.filter((post) => !savedIn[post.id]).map((post) => post.id);
-  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
+  const itemStates = toDownloadStates(trackedJob);
+  const isPending = (id: string) => savedIn[id] === undefined && isBusy(itemStates[id]);
+  const isLocked = (id: string) => savedIn[id] !== undefined || isBusy(itemStates[id]);
   const storiesMessage = STORIES_MESSAGES[storiesStatus];
 
   return (
@@ -163,20 +180,7 @@ const Feed: React.FC<FeedProps> = ({
           {cached ? ' (dari cache)' : ''}
         </p>
         {user && <FavoriteToggle platform={platform} username={username} />}
-        {user ? (
-          <button
-            type="button"
-            className={`ml-auto ${secondaryButton}`}
-            disabled={selectableIds.length === 0}
-            onClick={() => setSelected(allSelected ? new Set() : new Set(selectableIds))}
-          >
-            {selectableIds.length === 0
-              ? 'Semua sudah di Library'
-              : allSelected
-                ? 'Batal pilih semua'
-                : 'Pilih semua'}
-          </button>
-        ) : (
+        {!user && (
           <p className="ml-auto text-sm text-gray-700">
             <Link to="/login?next=/" className={`underline text-gray-900 ${focusRing}`}>
               Login
@@ -187,9 +191,21 @@ const Feed: React.FC<FeedProps> = ({
       </div>
 
       <section className="mb-8" aria-labelledby="stories-title">
-        <h2 id="stories-title" className="text-2xl font-bold mb-4">
-          Stories
-        </h2>
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <h2 id="stories-title" className="text-2xl font-bold">
+            Stories
+          </h2>
+          {user && (
+            <SectionSelectAll
+              ids={stories.map((story) => story.id)}
+              selected={selected}
+              isLocked={isLocked}
+              isPending={isPending}
+              noun="story"
+              onChange={selectMany}
+            />
+          )}
+        </div>
         {stories.length > 0 ? (
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-4">
             {stories.map((story) => (
@@ -199,6 +215,7 @@ const Feed: React.FC<FeedProps> = ({
                 isSelectable={user !== null}
                 isSelected={selected.has(story.id)}
                 savedFolders={savedIn[story.id]}
+                downloadState={itemStates[story.id]}
                 onToggle={toggle}
               />
             ))}
@@ -214,12 +231,28 @@ const Feed: React.FC<FeedProps> = ({
           isSelectable={user !== null}
           selected={selected}
           savedIn={savedIn}
+          downloadStates={itemStates}
+          isLocked={isLocked}
+          isPending={isPending}
           onToggle={toggle}
+          onSelectMany={selectMany}
           onItemsLoaded={lookupSaved}
         />
       )}
 
-      <h2 className="text-2xl font-bold mb-4">Feed</h2>
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <h2 className="text-2xl font-bold">Feed</h2>
+        {user && (
+          <SectionSelectAll
+            ids={regularPosts.map((post) => post.id)}
+            selected={selected}
+            isLocked={isLocked}
+            isPending={isPending}
+            noun="post"
+            onChange={selectMany}
+          />
+        )}
+      </div>
       {regularPosts.length === 0 && (
         <p className="mb-4 text-gray-700">Belum ada post di rentang ini.</p>
       )}
@@ -233,11 +266,17 @@ const Feed: React.FC<FeedProps> = ({
                 selected.has(post.id) ? 'ring-4 ring-gray-900' : ''
               }`}
             >
-              <PostCarousel post={post} isSaved={savedFolders !== undefined} />
+              <div className="relative">
+                <PostCarousel
+                  post={post}
+                  isSaved={savedFolders !== undefined || itemStates[post.id] === 'done'}
+                />
+                <DownloadOverlay state={itemStates[post.id]} />
+              </div>
               {user && (
                 <SelectToggle
                   isSelected={selected.has(post.id)}
-                  isDisabled={savedFolders !== undefined}
+                  isDisabled={isLocked(post.id)}
                   label={
                     savedFolders
                       ? `Sudah di Library: ${savedFolders.join(', ')}`
@@ -316,6 +355,7 @@ const Feed: React.FC<FeedProps> = ({
           selectedIds={Array.from(selected)}
           onClearSelection={() => setSelected(new Set())}
           onJobFinished={refreshAllSaved}
+          onJobUpdate={setTrackedJob}
         />
       )}
     </div>
