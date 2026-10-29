@@ -10,6 +10,7 @@ interface StoryProps {
   isSelected: boolean;
   savedFolders: string[] | undefined;
   downloadState?: ItemDownloadState;
+  downloadPercent?: number | null;
   onToggle: (id: string) => void;
 }
 
@@ -19,6 +20,7 @@ const Story: React.FC<StoryProps> = ({
   isSelected,
   savedFolders,
   downloadState,
+  downloadPercent = null,
   onToggle,
 }) => (
   <div className={`relative rounded-lg ${isSelected ? 'ring-4 ring-gray-900' : ''}`}>
@@ -38,7 +40,7 @@ const Story: React.FC<StoryProps> = ({
         <p className="text-white text-sm truncate">{story.caption}</p>
       </div>
     )}
-    <DownloadOverlay state={downloadState} className="rounded-lg" />
+    <DownloadOverlay state={downloadState} percent={downloadPercent} className="rounded-lg" />
     {isSelectable && (
       <SelectToggle
         isSelected={isSelected}

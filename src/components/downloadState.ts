@@ -34,3 +34,27 @@ export const downloadStates = (tracked: TrackedJob | null): Record<string, ItemD
   });
   return states;
 };
+
+export type ContentSection = 'story' | 'highlight' | 'post';
+
+const SECTION_ORDER: ContentSection[] = ['story', 'highlight', 'post'];
+
+/** "2 story & 1 highlight & 3 post", only the sections that are in the selection. */
+export const describeSelection = (
+  ids: string[],
+  sectionOf: (id: string) => ContentSection,
+): string => {
+  const counts: Record<ContentSection, number> = { story: 0, highlight: 0, post: 0 };
+  ids.forEach((id) => {
+    counts[sectionOf(id)] += 1;
+  });
+  return SECTION_ORDER.filter((section) => counts[section] > 0)
+    .map((section) => `${counts[section]} ${section}`)
+    .join(' & ');
+};
+
+/** Percent of the post being downloaded right now, null for every other post. */
+export const downloadPercent = (tracked: TrackedJob | null, postId: string): number | null =>
+  tracked && tracked.job.status === 'running' && tracked.job.currentPostId === postId
+    ? tracked.job.currentPercent
+    : null;

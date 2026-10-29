@@ -9,25 +9,28 @@ interface DownloadBarProps {
   platform: Platform;
   username: string;
   selectedIds: string[];
+  // What the selection holds per section, e.g. "2 story & 1 post".
+  selectionLabel: string;
   onClearSelection: () => void;
   onJobFinished: () => void;
   // Every poll result, so the cards can show which post is downloading. null when closed.
   onJobUpdate: (tracked: TrackedJob | null) => void;
 }
 
-const JOB_POLL_MS = 2000;
+// Fast enough for the per post percentage to move smoothly.
+const JOB_POLL_MS = 1000;
 
-const jobSummary = (job: DownloadJob): string => {
+const jobSummary = (job: DownloadJob, label: string): string => {
   if (job.status === 'queued') {
-    return `Menunggu antrian, ${job.totalPosts} post`;
+    return `Menunggu antrian, ${label}`;
   }
-  const progress = `${job.donePosts + job.failedPosts}/${job.totalPosts} post`;
+  const progress = `${job.donePosts + job.failedPosts}/${job.totalPosts} (${label})`;
   if (job.status === 'running') {
     return `Mengunduh ${progress}${job.failedPosts ? `, ${job.failedPosts} gagal` : ''}`;
   }
   const parts = [`${job.savedItems} file tersimpan`];
   if (job.skippedItems) parts.push(`${job.skippedItems} dilewati (sudah ada)`);
-  if (job.failedPosts) parts.push(`${job.failedPosts} post gagal`);
+  if (job.failedPosts) parts.push(`${job.failedPosts} gagal`);
   return `${job.status === 'done' ? 'Selesai' : 'Berhenti'}: ${parts.join(', ')}`;
 };
 
@@ -35,6 +38,7 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
   platform,
   username,
   selectedIds,
+  selectionLabel,
   onClearSelection,
   onJobFinished,
   onJobUpdate,
@@ -43,6 +47,7 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
   const [folders, setFolders] = useState<Folder[]>([]);
   const [job, setJob] = useState<DownloadJob | null>(null);
   const [jobPostIds, setJobPostIds] = useState<string[]>([]);
+  const [jobLabel, setJobLabel] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -95,6 +100,7 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
         postIds: selectedIds,
       });
       setJobPostIds(selectedIds);
+      setJobLabel(selectionLabel);
       setJob(created);
       onClearSelection();
     } catch (caught) {
@@ -110,7 +116,7 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
       <div className="container mx-auto px-4 py-3 flex flex-col gap-3">
         {job && (
           <div role="status" aria-live="polite" className="flex flex-wrap items-center gap-3 text-sm">
-            <span className="font-semibold text-gray-900">{jobSummary(job)}</span>
+            <span className="font-semibold text-gray-900">{jobSummary(job, jobLabel)}</span>
             {!isJobActive && (
               <>
                 <Link to={`/library/${job.folderId}`} className={`underline text-gray-900 ${focusRing}`}>
@@ -163,7 +169,7 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
             </div>
             <div className="flex gap-2">
               <button type="submit" className={`flex-1 md:flex-none ${primaryButton}`} disabled={isSubmitting || isJobActive}>
-                {isSubmitting ? 'Memulai...' : `Download ${selectedIds.length} post`}
+                {isSubmitting ? 'Memulai...' : `Download ${selectionLabel}`}
               </button>
               <button type="button" className={`flex-1 md:flex-none ${secondaryButton}`} onClick={onClearSelection}>
                 Batal pilih

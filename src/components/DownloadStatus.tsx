@@ -11,8 +11,16 @@ const LABELS: Record<ItemDownloadState, string> = {
 };
 
 /** Covers a card while its post is in the job. Text label too, so it still reads with motion off. */
-export const DownloadOverlay: React.FC<{ state: ItemDownloadState | undefined; className?: string }> = ({
+interface DownloadOverlayProps {
+  state: ItemDownloadState | undefined;
+  // Only for the post being downloaded, null until the first bytes arrive.
+  percent?: number | null;
+  className?: string;
+}
+
+export const DownloadOverlay: React.FC<DownloadOverlayProps> = ({
   state,
+  percent = null,
   className = '',
 }) => {
   if (!state || state === 'done') return null;
@@ -27,7 +35,21 @@ export const DownloadOverlay: React.FC<{ state: ItemDownloadState | undefined; c
       {state === 'downloading' && (
         <Loader2 aria-hidden="true" className="h-8 w-8 animate-spin motion-reduce:animate-none" />
       )}
-      <span className="rounded bg-gray-900/80 px-2 py-1">{LABELS[state]}</span>
+      <span className="rounded bg-gray-900/80 px-2 py-1">
+        {/* No percent yet means the pause between posts or the link lookup, not bytes moving. */}
+        {state === 'downloading' && percent === null ? 'Menyiapkan...' : LABELS[state]}
+      </span>
+      {state === 'downloading' && percent !== null && (
+        <span className="flex w-3/5 max-w-[10rem] flex-col items-center gap-1">
+          <span className="text-base tabular-nums">{percent}%</span>
+          <span className="block h-1.5 w-full overflow-hidden rounded-full bg-white/30">
+            <span
+              className="block h-full rounded-full bg-white transition-[width] duration-700 ease-out motion-reduce:transition-none"
+              style={{ width: `${percent}%` }}
+            />
+          </span>
+        </span>
+      )}
     </div>
   );
 };

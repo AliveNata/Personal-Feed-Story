@@ -61,6 +61,10 @@ def content_type_for_upload(filename: str, declared: str | None) -> str | None:
     return declared_clean if declared_clean in CONTENT_TYPE_EXTENSIONS else None
 
 
+# (bytes received so far, total bytes or None when the CDN sends no Content-Length)
+ProgressCallback = Callable[[int, int | None], None]
+
+
 class DownloadError(Exception):
     pass
 
@@ -110,7 +114,13 @@ class LibraryStorage:
     def thumbnail_path(self, sha256: str) -> Path:
         return self.root / "thumbs" / sha256[:2] / f"{sha256}.webp"
 
-    async def download(self, url: str, headers: dict[str, str], max_bytes: int) -> DownloadedFile:
+    async def download(
+        self,
+        url: str,
+        headers: dict[str, str],
+        max_bytes: int,
+        on_progress: ProgressCallback | None = None,
+    ) -> DownloadedFile:
         temp_path = self.root / "tmp" / uuid.uuid4().hex
         digest = hashlib.sha256()
         size = 0
@@ -123,6 +133,8 @@ class LibraryStorage:
                 content_type = response.headers.get("content-type", "").split(";")[0].strip()
                 if content_type not in CONTENT_TYPE_EXTENSIONS:
                     raise DownloadError(f"Tipe file tidak didukung: {content_type or 'kosong'}")
+                length = response.headers.get("content-length", "")
+                total = int(length) if length.isdigit() else None
                 with temp_path.open("wb") as file:
                     async for chunk in response.aiter_content():
                         size += len(chunk)
@@ -130,6 +142,8 @@ class LibraryStorage:
                             raise DownloadError("File melebihi batas ukuran download")
                         digest.update(chunk)
                         file.write(chunk)
+                        if on_progress is not None:
+                            on_progress(size, total)
         except RequestException as exc:
             temp_path.unlink(missing_ok=True)
             raise DownloadError(f"Gagal download: {exc}") from exc

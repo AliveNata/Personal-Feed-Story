@@ -13,7 +13,7 @@ from app.db import Blob, DownloadJob, Folder, MediaItem
 from app.errors import RateLimitedError, UserNotFoundError
 from app.library import service
 from app.library.jobs import JobRunner
-from app.library.storage import DownloadedFile, DownloadError, LibraryStorage
+from app.library.storage import DownloadedFile, DownloadError, LibraryStorage, ProgressCallback
 from app.library.types import ResolvedPost
 from tests.conftest import requires_db
 
@@ -34,7 +34,13 @@ class FakeCdnStorage(LibraryStorage):
         super().__init__(root, **kwargs)  # type: ignore[arg-type]
         self.downloads: list[str] = []
 
-    async def download(self, url: str, headers: dict[str, str], max_bytes: int) -> DownloadedFile:
+    async def download(
+        self,
+        url: str,
+        headers: dict[str, str],
+        max_bytes: int,
+        on_progress: ProgressCallback | None = None,
+    ) -> DownloadedFile:
         import hashlib
         import uuid
 
@@ -42,6 +48,9 @@ class FakeCdnStorage(LibraryStorage):
         temp = self.root / "tmp" / uuid.uuid4().hex
         write_jpeg(temp, "red" if "red" in url else "blue")
         data = temp.read_bytes()
+        if on_progress is not None:
+            on_progress(len(data) // 2, len(data))
+            on_progress(len(data), len(data))
         return DownloadedFile(temp, hashlib.sha256(data).hexdigest(), "image/jpeg", len(data))
 
 
@@ -271,10 +280,16 @@ class CachedThenFreshResolver(FakeResolver):
 
 
 class DeadLinkStorage(FakeCdnStorage):
-    async def download(self, url: str, headers: dict[str, str], max_bytes: int) -> DownloadedFile:
+    async def download(
+        self,
+        url: str,
+        headers: dict[str, str],
+        max_bytes: int,
+        on_progress: ProgressCallback | None = None,
+    ) -> DownloadedFile:
         if url == "https://dead":
             raise DownloadError("CDN membalas 403")
-        return await super().download(url, headers, max_bytes)
+        return await super().download(url, headers, max_bytes, on_progress)
 
 
 async def test_expired_cached_link_is_resolved_again(
@@ -294,3 +309,42 @@ async def test_expired_cached_link_is_resolved_again(
     assert job is not None
     assert (job.status, job.done_posts, job.saved_items) == ("done", 1, 1)
     assert resolver.calls == ["story-1", "story-1"]
+
+
+class RecordingProgress:
+    def __init__(self) -> None:
+        self.reports: list[tuple[str, int | None]] = []
+        self.cleared: list[str] = []
+
+    def report(
+        self, job_id: str, post_id: str, percent: int | None, *, force: bool = False
+    ) -> None:
+        self.reports.append((post_id, percent))
+
+    def clear(self, job_id: str) -> None:
+        self.cleared.append(job_id)
+
+
+async def test_job_reports_percent_per_post_across_its_files(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    # Arrange
+    progress = RecordingProgress()
+    resolver = FakeResolver({"carousel": [PHOTO_URL_BLUE, PHOTO_URL_BLUE + "?2"]})
+    job_id = await make_job(session_factory, "Progress", ["carousel"])
+    runner = JobRunner(
+        session_factory,
+        {"instagram": resolver},
+        FakeCdnStorage(tmp_path),
+        {"instagram": (0, 0)},
+        10_000_000,
+        no_sleep,
+        progress=progress,
+    )
+
+    # Act
+    await runner.run(job_id)
+
+    # Assert
+    assert [percent for _, percent in progress.reports] == [0, 25, 50, 75, 100]
+    assert progress.cleared == [job_id]

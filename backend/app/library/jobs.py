@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 from collections.abc import Awaitable, Callable, Mapping
+from functools import partial
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.db import DownloadJob, MediaItem
 from app.errors import RateLimitedError, SourceError
 from app.library import service
+from app.library.progress import NullProgress, ProgressReporter
 from app.library.storage import DownloadError, LibraryStorage
 from app.library.types import MediaResolver, ResolvedPost
 
@@ -29,6 +31,7 @@ class JobRunner:
         delays: Mapping[str, tuple[float, float]],
         max_download_bytes: int,
         sleep: Sleep = asyncio.sleep,
+        progress: ProgressReporter | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._resolvers = resolvers
@@ -36,6 +39,7 @@ class JobRunner:
         self._delays = delays
         self._max_download_bytes = max_download_bytes
         self._sleep = sleep
+        self._progress: ProgressReporter = progress or NullProgress()
 
     async def run(self, job_id: str) -> None:
         try:
@@ -45,6 +49,8 @@ class JobRunner:
             logger.exception("job %s crashed", job_id)
             await self._finish(job_id, "failed")
             raise
+        finally:
+            self._progress.clear(job_id)
 
     async def _run(self, job_id: str) -> None:
         async with self._session_factory() as db:
@@ -62,10 +68,11 @@ class JobRunner:
         for position, post_id in enumerate(post_ids):
             if position > 0:
                 await self._sleep(random.uniform(low, high))
+            self._progress.report(job_id, post_id, 0, force=True)
             try:
                 resolved = await resolver.resolve_media(username, post_id)
                 try:
-                    saved, skipped = await self._save_post(folder_id, platform, resolved)
+                    saved, skipped = await self._save_post(job_id, folder_id, platform, resolved)
                 except DownloadError:
                     if not resolved.from_cache:
                         raise
@@ -74,7 +81,7 @@ class JobRunner:
                         "job %s post %s: cached link failed, resolving again", job_id, post_id
                     )
                     resolved = await resolver.resolve_media(username, post_id, fresh=True)
-                    saved, skipped = await self._save_post(folder_id, platform, resolved)
+                    saved, skipped = await self._save_post(job_id, folder_id, platform, resolved)
             except RateLimitedError as exc:
                 # Continuing would only dig the rate limit deeper, so fail the rest at once.
                 remaining = post_ids[position:]
@@ -90,11 +97,20 @@ class JobRunner:
         await self._finish(job_id, "done")
 
     async def _save_post(
-        self, folder_id: int, platform: str, post: ResolvedPost
+        self, job_id: str, folder_id: int, platform: str, post: ResolvedPost
     ) -> tuple[int, int]:
         if not post.media_urls:
             raise DownloadError("Post tidak punya media yang bisa di-download")
         saved = skipped = 0
+        file_count = len(post.media_urls)
+
+        def report(index: int, received: int, total: int | None) -> None:
+            # Percent of the whole post: earlier files count as done, the current one by bytes.
+            # Without a Content-Length only finished files move the number.
+            fraction = min(received / total, 1.0) if total else 0.0
+            percent = round((index + fraction) / file_count * 100)
+            self._progress.report(job_id, post.post_id, percent)
+
         for index, url in enumerate(post.media_urls):
             async with self._session_factory() as db:
                 exists = await db.scalar(
@@ -110,7 +126,10 @@ class JobRunner:
                 continue
 
             downloaded = await self._storage.download(
-                url, post.request_headers, self._max_download_bytes
+                url,
+                post.request_headers,
+                self._max_download_bytes,
+                on_progress=partial(report, index),
             )
             async with self._session_factory() as db:
                 item = await service.add_file_to_folder(

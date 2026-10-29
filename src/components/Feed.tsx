@@ -13,7 +13,14 @@ import RateNotice from './RateNotice';
 import SelectToggle from './SelectToggle';
 import Story from './Story';
 import { DownloadOverlay, SectionSelectAll } from './DownloadStatus';
-import { TrackedJob, downloadStates as toDownloadStates, isBusy } from './downloadState';
+import {
+  ContentSection,
+  TrackedJob,
+  describeSelection,
+  downloadPercent,
+  downloadStates as toDownloadStates,
+  isBusy,
+} from './downloadState';
 import { focusRing, primaryButton } from './ui';
 
 export type FeedStatus = 'idle' | 'loading' | 'success' | 'error';
@@ -69,6 +76,8 @@ const Feed: React.FC<FeedProps> = ({
 
   // Every post, story and highlight item seen for this account, to refresh their saved state.
   const knownItems = useRef<Map<string, Post>>(new Map());
+  // Highlight items share the story id format, so remember which ids came from a highlight.
+  const highlightIds = useRef<Set<string>>(new Set());
   const [trackedJob, setTrackedJob] = useState<TrackedJob | null>(null);
 
   // A different account means different post ids, so old state would point at nothing.
@@ -76,6 +85,7 @@ const Feed: React.FC<FeedProps> = ({
     setSelected(new Set());
     setSavedIn({});
     knownItems.current = new Map();
+    highlightIds.current = new Set();
   }, [platform, username]);
 
   // Only a fresh load counts as a visit. Reading markSeen through a ref keeps a later
@@ -168,6 +178,10 @@ const Feed: React.FC<FeedProps> = ({
   const isPending = (id: string) => savedIn[id] === undefined && isBusy(itemStates[id]);
   const isLocked = (id: string) => savedIn[id] !== undefined || isBusy(itemStates[id]);
   const storiesMessage = STORIES_MESSAGES[storiesStatus];
+  const storyIds = new Set(stories.map((story) => story.id));
+  const sectionOf = (id: string): ContentSection =>
+    storyIds.has(id) ? 'story' : highlightIds.current.has(id) ? 'highlight' : 'post';
+  const selectedIds = Array.from(selected);
 
   return (
     <div className={user ? 'pb-48 md:pb-32' : ''}>
@@ -216,6 +230,7 @@ const Feed: React.FC<FeedProps> = ({
                 isSelected={selected.has(story.id)}
                 savedFolders={savedIn[story.id]}
                 downloadState={itemStates[story.id]}
+                downloadPercent={downloadPercent(trackedJob, story.id)}
                 onToggle={toggle}
               />
             ))}
@@ -232,11 +247,15 @@ const Feed: React.FC<FeedProps> = ({
           selected={selected}
           savedIn={savedIn}
           downloadStates={itemStates}
+          percentFor={(id) => downloadPercent(trackedJob, id)}
           isLocked={isLocked}
           isPending={isPending}
           onToggle={toggle}
           onSelectMany={selectMany}
-          onItemsLoaded={lookupSaved}
+          onItemsLoaded={(items) => {
+            items.forEach((item) => highlightIds.current.add(item.id));
+            lookupSaved(items);
+          }}
         />
       )}
 
@@ -271,7 +290,10 @@ const Feed: React.FC<FeedProps> = ({
                   post={post}
                   isSaved={savedFolders !== undefined || itemStates[post.id] === 'done'}
                 />
-                <DownloadOverlay state={itemStates[post.id]} />
+                <DownloadOverlay
+                  state={itemStates[post.id]}
+                  percent={downloadPercent(trackedJob, post.id)}
+                />
               </div>
               {user && (
                 <SelectToggle
@@ -352,7 +374,8 @@ const Feed: React.FC<FeedProps> = ({
         <DownloadBar
           platform={platform}
           username={username}
-          selectedIds={Array.from(selected)}
+          selectedIds={selectedIds}
+          selectionLabel={describeSelection(selectedIds, sectionOf)}
           onClearSelection={() => setSelected(new Set())}
           onJobFinished={refreshAllSaved}
           onJobUpdate={setTrackedJob}

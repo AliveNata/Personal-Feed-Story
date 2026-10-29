@@ -12,6 +12,7 @@ interface HighlightsProps {
   selected: Set<string>;
   savedIn: Record<string, string[]>;
   downloadStates: Record<string, ItemDownloadState>;
+  percentFor: (id: string) => number | null;
   isLocked: (id: string) => boolean;
   isPending: (id: string) => boolean;
   onToggle: (id: string) => void;
@@ -65,6 +66,7 @@ const Highlights: React.FC<HighlightsProps> = ({
   selected,
   savedIn,
   downloadStates,
+  percentFor,
   isLocked,
   isPending,
   onToggle,
@@ -200,6 +202,7 @@ const Highlights: React.FC<HighlightsProps> = ({
                 isSelected={selected.has(item.id)}
                 savedFolders={savedIn[item.id]}
                 downloadState={downloadStates[item.id]}
+                downloadPercent={percentFor(item.id)}
                 onToggle={onToggle}
               />
             ))}

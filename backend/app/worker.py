@@ -13,6 +13,7 @@ from app.db import build_engine, build_session_factory
 from app.factory import build_sources, build_storage
 from app.favorites import service as favorites
 from app.library.jobs import JobRunner
+from app.library.progress import RedisProgress
 from app.library.types import MediaResolver
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -47,6 +48,7 @@ async def startup(ctx: dict[str, Any]) -> None:
             "tiktok": settings.tiktok_delay_seconds,
         },
         settings.max_download_bytes,
+        progress=RedisProgress(redis),
     )
 
 

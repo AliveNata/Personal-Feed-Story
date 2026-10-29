@@ -5,13 +5,15 @@ from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import Field, field_validator
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import get_db, require_user
+from app.auth import get_db, get_redis, require_user
 from app.config import get_settings
 from app.db import DownloadJob, Folder, MediaItem, User
 from app.library import service
+from app.library.progress import read_progress
 from app.library.storage import DownloadError, LibraryStorage, content_type_for_upload
 from app.models import CamelModel, Platform
 
@@ -59,6 +61,9 @@ class JobResponse(CamelModel):
     saved_items: int
     skipped_items: int
     errors: list[dict[str, Any]]
+    # Live, from Redis: the post being downloaded and how far, None between posts.
+    current_post_id: str | None = None
+    current_percent: int | None = None
 
 
 class MediaCounts(CamelModel):
@@ -153,11 +158,16 @@ async def create_download(
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
-async def get_job(job_id: str, db: DbSession) -> JobResponse:
+async def get_job(
+    job_id: str, db: DbSession, redis: Annotated[Redis, Depends(get_redis)]
+) -> JobResponse:
     job = await db.get(DownloadJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job tidak ditemukan")
-    return _job_response(job)
+    response = _job_response(job)
+    if job.status == "running":
+        response.current_post_id, response.current_percent = await read_progress(redis, job_id)
+    return response
 
 
 @router.get("/folders", response_model=list[FolderResponse])

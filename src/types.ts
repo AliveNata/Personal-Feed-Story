@@ -76,6 +76,9 @@ export interface DownloadJob {
   savedItems: number;
   skippedItems: number;
   errors: { postId: string; message: string }[];
+  // Live progress of the post being downloaded, null between posts or when unknown.
+  currentPostId: string | null;
+  currentPercent: number | null;
 }
 
 export type MediaSource = 'post' | 'story' | 'upload';
