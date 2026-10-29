@@ -7,6 +7,8 @@ interface FeedControlsProps {
   isLoading: boolean;
   onSubmit: (platform: Platform, username: string) => void;
   onRefresh: () => void;
+  // The toggle also filters the favorites row, before any search is sent.
+  onPlatformChange: (platform: Platform) => void;
 }
 
 const PLATFORM_LABELS: Record<Platform, string> = {
@@ -20,6 +22,7 @@ const FeedControls: React.FC<FeedControlsProps> = ({
   isLoading,
   onSubmit,
   onRefresh,
+  onPlatformChange,
 }) => {
   const [draftPlatform, setDraftPlatform] = useState<Platform>(platform);
   const [draftUsername, setDraftUsername] = useState(username);
@@ -54,7 +57,10 @@ const FeedControls: React.FC<FeedControlsProps> = ({
               key={option}
               type="button"
               aria-pressed={draftPlatform === option}
-              onClick={() => setDraftPlatform(option)}
+              onClick={() => {
+                setDraftPlatform(option);
+                onPlatformChange(option);
+              }}
               className={`flex-1 md:flex-none min-h-[44px] px-4 text-sm font-medium ${focusRing} ${
                 draftPlatform === option
                   ? 'bg-gray-900 text-white'

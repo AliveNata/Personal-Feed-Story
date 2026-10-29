@@ -45,6 +45,8 @@ const describeError = (error: unknown): string =>
 function App() {
   const [username, setUsername] = useState('');
   const [platform, setPlatform] = useState<Platform>('tiktok');
+  // Toggle state of the search form, which can differ from the feed on screen until submit.
+  const [pickedPlatform, setPickedPlatform] = useState<Platform>('tiktok');
   const [feed, setFeed] = useState<FeedState>(IDLE_FEED);
   const activeRequest = useRef<AbortController | null>(null);
 
@@ -112,6 +114,8 @@ function App() {
     }
   }, [feed.nextCursor, feed.isLoadingMore, platform, username]);
 
+  useEffect(() => setPickedPlatform(platform), [platform]);
+
   useEffect(() => {
     void loadFeed(platform, username);
   }, [platform, username, loadFeed]);
@@ -157,6 +161,7 @@ function App() {
                     <>
                       <FavoritesBar
                         activePlatform={platform}
+                        shownPlatform={pickedPlatform}
                         activeUsername={username}
                         onOpen={handleSearch}
                       />
@@ -166,6 +171,7 @@ function App() {
                         isLoading={feed.status === 'loading'}
                         onSubmit={handleSearch}
                         onRefresh={() => void loadFeed(platform, username, true)}
+                        onPlatformChange={setPickedPlatform}
                       />
                       <Feed
                         status={feed.status}

@@ -9,6 +9,8 @@ import { useFavorites } from './FavoritesContext';
 
 interface FavoritesBarProps {
   activePlatform: Platform;
+  // Platform picked in the search form. Only favorites of that platform are shown.
+  shownPlatform: Platform;
   activeUsername: string;
   onOpen: (platform: Platform, username: string) => void;
 }
@@ -57,7 +59,12 @@ const lastChecked = (favorites: Favorite[]): string | null => {
 const describeCheckedAt = (isoDate: string): string =>
   Date.now() - new Date(isoDate).getTime() < 60_000 ? 'barusan' : formatRelativeTime(isoDate);
 
-const FavoritesBar: React.FC<FavoritesBarProps> = ({ activePlatform, activeUsername, onOpen }) => {
+const FavoritesBar: React.FC<FavoritesBarProps> = ({
+  activePlatform,
+  shownPlatform,
+  activeUsername,
+  onOpen,
+}) => {
   const { user } = useAuth();
   const { status, favorites, errorMessage, isChecking, reload, checkNow } = useFavorites();
   const [checkError, setCheckError] = useState<string | null>(null);
@@ -75,7 +82,8 @@ const FavoritesBar: React.FC<FavoritesBarProps> = ({ activePlatform, activeUsern
     }
   };
 
-  const checkedAt = lastChecked(favorites);
+  const visible = favorites.filter((favorite) => favorite.platform === shownPlatform);
+  const checkedAt = lastChecked(visible);
 
   return (
     <section aria-labelledby="favorites-title" className="mb-6 rounded-lg bg-white p-4 shadow-md">
@@ -83,7 +91,7 @@ const FavoritesBar: React.FC<FavoritesBarProps> = ({ activePlatform, activeUsern
         <h2 id="favorites-title" className="text-base font-bold text-gray-900">
           Favorit
         </h2>
-        {status === 'ready' && favorites.length > 0 && (
+        {status === 'ready' && visible.length > 0 && (
           <>
             <p role="status" aria-live="polite" className="text-sm text-gray-700">
               {isChecking
@@ -122,15 +130,16 @@ const FavoritesBar: React.FC<FavoritesBarProps> = ({ activePlatform, activeUsern
           </button>
         </div>
       )}
-      {status === 'ready' && favorites.length === 0 && (
+      {status === 'ready' && visible.length === 0 && (
         <p className="text-sm text-gray-700">
-          Belum ada favorit. Buka feed sebuah akun, lalu klik "Favoritkan".
+          Belum ada favorit {PLATFORM_LABELS[shownPlatform]}. Buka feed sebuah akun, lalu klik
+          "Favoritkan".
         </p>
       )}
 
-      {status === 'ready' && favorites.length > 0 && (
+      {status === 'ready' && visible.length > 0 && (
         <ul className="flex gap-3 overflow-x-auto p-1">
-          {favorites.map((favorite) => {
+          {visible.map((favorite) => {
             const hasUpdate = favorite.updates.length > 0;
             const isActive =
               favorite.platform === activePlatform &&
