@@ -1,5 +1,7 @@
 import {
   DownloadJob,
+  Favorite,
+  FavoritesResponse,
   FeedResponse,
   Folder,
   HighlightItemsResponse,
@@ -217,3 +219,18 @@ export const formatBytes = (bytes: number): string => {
   }
   return `${value.toLocaleString('id', { maximumFractionDigits: unit === 0 ? 0 : 1 })} ${BYTE_UNITS[unit]}`;
 };
+
+export const fetchFavorites = (): Promise<FavoritesResponse> =>
+  request<FavoritesResponse>('/api/favorites');
+
+export const addFavorite = (platform: Platform, username: string): Promise<Favorite> =>
+  request<Favorite>('/api/favorites', { method: 'POST', json: { platform, username } });
+
+export const deleteFavorite = (favoriteId: number): Promise<void> =>
+  request<void>(`/api/favorites/${favoriteId}`, { method: 'DELETE' });
+
+export const markFavoriteSeen = (favoriteId: number): Promise<Favorite> =>
+  request<Favorite>(`/api/favorites/${favoriteId}/seen`, { method: 'POST' });
+
+export const checkFavoritesNow = (): Promise<{ checking: boolean }> =>
+  request<{ checking: boolean }>('/api/favorites/check', { method: 'POST' });

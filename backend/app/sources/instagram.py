@@ -33,6 +33,7 @@ from app.errors import PrivateAccountError, RateLimitedError, UpstreamError, Use
 from app.library.types import ResolvedPost
 from app.models import FeedPage, Highlight, MediaSlide, Post, StoriesStatus, proxied_media_url
 from app.ratelimit import RateBudget, wait_message
+from app.sources import ProfileProbe
 
 logger = logging.getLogger(__name__)
 
@@ -340,6 +341,25 @@ class InstagramSource:
             return [], "none"
         logger.info("instagram user %s has %d active story items", user_id, len(items))
         return items, "available" if items else "none"
+
+    async def probe(self, username: str) -> ProfileProbe:
+        logged_in = self._loader.context.is_logged_in
+        return await self._run(lambda: self._probe_sync(username), cost=2 if logged_in else 1)
+
+    def _probe_sync(self, username: str) -> ProfileProbe:
+        profile = instaloader.Profile.from_username(self._loader.context, username)
+        latest_story_at = None
+        if self._include_stories and self._loader.context.is_logged_in:
+            # Story.latest_media_utc comes with the reel list, so no per item requests.
+            stories = list(self._loader.get_stories(userids=[profile.userid]))
+            if stories:
+                latest_story_at = max(_as_utc(story.latest_media_utc) for story in stories)
+        return ProfileProbe(
+            # The plain property fetches an extra iPhone endpoint when logged in.
+            avatar_url=profile.profile_pic_url_no_iphone or "",
+            post_count=profile.mediacount,
+            latest_story_at=latest_story_at,
+        )
 
     async def list_highlights(self, username: str) -> tuple[str, list[Highlight]]:
         if not self._loader.context.is_logged_in:

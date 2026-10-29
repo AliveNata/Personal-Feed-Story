@@ -10,6 +10,7 @@ Feed viewer for TikTok and Instagram accounts, with a private download library. 
 - "Muat lebih banyak" loads older posts. Instagram pages by cursor, TikTok by 30 day windows back to one year.
 - Instagram highlights load on demand. Story and highlight items share ids, so a downloaded item is greyed out wherever it shows up.
 - Folders have Post, Story and Upload tabs, each split into Foto and Video.
+- Favorites (login required): "Favoritkan" on an open feed pins the account to a row above the search form, with its profile photo. A blue ring means a new post (TikTok and Instagram) or a new Instagram story since you last opened that feed. The worker checks every 2 hours, "Cek sekarang" checks right away.
 - A request budget per platform (`INSTAGRAM_RATE_BUDGET`, `TIKTOK_RATE_BUDGET`, default 100 and 150 requests per 15 minutes) warns in the UI when close to the limit and refuses with "tunggu sekitar N menit" when used up or after a real 429. These numbers are our own conservative guesses.
 
 ## Architecture
@@ -198,6 +199,11 @@ Login required:
 | `DELETE /api/folders/{id}`, `DELETE /api/items/{id}` | Delete |
 | `POST /api/folders/{id}/files` | Upload one file (multipart field `file`). Same file twice in one folder is skipped |
 | `POST /api/downloaded/lookup` | `{platform, postIds}` returns the folders that already hold each post |
+| `GET /api/favorites` | Favorites with avatar, `updates` (`post`, `story`) and whether a check is running |
+| `POST /api/favorites` | `{platform, username}` adds an account and probes it once for the avatar |
+| `DELETE /api/favorites/{id}` | Remove |
+| `POST /api/favorites/{id}/seen` | Clears the blue ring, called when the feed is opened |
+| `POST /api/favorites/check` | Queues a check of every favorite now |
 
 Errors come back as `{"detail": "..."}`:
 
@@ -218,6 +224,7 @@ If Redis is down the API keeps working without cache and logs a warning.
 - CDN media links are signed and expire. If covers stop loading, use "Scrape ulang" to bypass the cache.
 - Download jobs run one at a time. Instagram waits 4 to 9 seconds between posts by default (`INSTAGRAM_DELAY_SECONDS`), TikTok 1 to 3 (`TIKTOK_DELAY_SECONDS`). A rate limit stops the rest of the job.
 - Story download needs the Instagram session, and stories expire after 24 hours.
+- Favorite checks compare the post count from the profile lookup (1 request per account, plus 1 for Instagram stories). A deleted post can hide a new one. Background checks stop once 70% of a platform budget is used, so manual scraping keeps some room.
 - `COMPRESS_PHOTOS` (WebP) and `TRANSCODE_VIDEOS` (H.265) are off by default and only apply to new downloads. H.265 does not play in Firefox.
 - Scraping goes against the TikTok and Instagram terms of service. Use secondary accounts and keep request volume low.
 

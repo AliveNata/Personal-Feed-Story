@@ -105,3 +105,20 @@ export interface MediaItem {
   fileUrl: string;
   thumbnailUrl: string | null;
 }
+
+export type FavoriteUpdate = 'post' | 'story';
+
+export interface Favorite {
+  id: number;
+  platform: Platform;
+  username: string;
+  avatarUrl: string | null;
+  updates: FavoriteUpdate[];
+  checkedAt: string | null;
+  checkError: string | null;
+}
+
+export interface FavoritesResponse {
+  favorites: Favorite[];
+  checking: boolean;
+}

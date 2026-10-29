@@ -22,6 +22,7 @@ from app.config import get_settings
 from app.db import build_engine, build_session_factory
 from app.errors import SourceError
 from app.factory import build_sources, build_storage
+from app.favorites import routes as favorites_routes
 from app.library import routes as library_routes
 from app.media import ALLOWED_CONTENT_TYPE_PREFIXES, is_allowed_media_url, referer_for
 from app.models import (
@@ -86,6 +87,7 @@ app.add_middleware(
 )
 app.include_router(auth.router)
 app.include_router(library_routes.router)
+app.include_router(favorites_routes.router)
 
 
 @app.exception_handler(SourceError)

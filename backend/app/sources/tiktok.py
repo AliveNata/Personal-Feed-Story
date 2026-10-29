@@ -12,6 +12,7 @@ from app.errors import PrivateAccountError, UpstreamError, UserNotFoundError
 from app.library.types import ResolvedPost
 from app.models import FeedPage, MediaSlide, Post, proxied_media_url
 from app.ratelimit import RateBudget
+from app.sources import ProfileProbe
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,15 @@ BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 )
+
+
+def _video_count(user_info: dict[str, Any]) -> int | None:
+    # Newer responses carry statsV2 with string counts next to (or instead of) stats.
+    for key in ("stats", "statsV2"):
+        stats = user_info.get(key)
+        if isinstance(stats, dict) and str(stats.get("videoCount", "")).isdigit():
+            return int(stats["videoCount"])
+    return None
 
 
 def douk_slides(item: dict[str, Any]) -> list[MediaSlide]:
@@ -123,31 +133,43 @@ class TikTokSource:
         body: dict[str, Any] = response.json()
         return body
 
-    async def resolve_sec_uid(self, username: str) -> str:
-        """Look up secUid through DouK's signed user detail call (see douk/user_route.py).
+    async def _user_info(self, username: str) -> dict[str, Any]:
+        """TikTok user detail through DouK's signed call (see douk/user_route.py).
 
         Scraping the profile HTML directly gets a WAF challenge page, even with a browser
         TLS fingerprint.
         """
-        if username.startswith(SEC_UID_PREFIX):
-            return username
-        cache_key = username.lower()
-        if cached := self._sec_uid_cache.get(cache_key):
-            return cached
-
         body = await self._post_douk(
             "/tiktok/user", {"unique_id": username, "cookie": self._cookie}
         )
-        data = body.get("data") or {}
-        sec_uid = (data.get("user") or {}).get("secUid") if isinstance(data, dict) else None
-        if not sec_uid:
+        data = body.get("data")
+        user = data.get("user") if isinstance(data, dict) else None
+        if not isinstance(data, dict) or not isinstance(user, dict) or not user.get("secUid"):
             logger.warning("douk user lookup failed for %s: %s", username, body.get("message"))
             raise UserNotFoundError(
                 f"Akun TikTok @{username} tidak ditemukan, atau cookie TikTok ditolak"
             )
+        self._sec_uid_cache[username.lower()] = str(user["secUid"])
+        return data
 
-        self._sec_uid_cache[cache_key] = str(sec_uid)
-        return str(sec_uid)
+    async def resolve_sec_uid(self, username: str) -> str:
+        if username.startswith(SEC_UID_PREFIX):
+            return username
+        if cached := self._sec_uid_cache.get(username.lower()):
+            return cached
+        data = await self._user_info(username)
+        return str(data["user"]["secUid"])
+
+    async def probe(self, username: str) -> ProfileProbe:
+        data = await self._user_info(username)
+        user: dict[str, Any] = data["user"]
+        avatar = user.get("avatarLarger") or user.get("avatarMedium") or user.get("avatarThumb")
+        return ProfileProbe(
+            avatar_url=str(avatar or ""),
+            post_count=_video_count(data),
+            # DouK has no TikTok story support.
+            latest_story_at=None,
+        )
 
     async def fetch_page(self, username: str, cursor: str | None) -> FeedPage:
         """One page = posts from one lookback window. Cursor is the window index, 0 = newest."""

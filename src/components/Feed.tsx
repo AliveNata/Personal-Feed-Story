@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Heart, MessageCircle, Share2 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
+import FavoriteToggle from '../favorites/FavoriteToggle';
+import { useFavorites } from '../favorites/FavoritesContext';
 import { Platform, Post, RateInfo, StoriesStatus } from '../types';
 import { formatRelativeTime, lookupDownloaded } from '../utils/api';
 import DownloadBar from './DownloadBar';
@@ -56,6 +58,9 @@ const Feed: React.FC<FeedProps> = ({
 }) => {
   const platformLabel = platform === 'instagram' ? 'Instagram' : 'TikTok';
   const { user } = useAuth();
+  const { markSeen } = useFavorites();
+  const markSeenRef = useRef(markSeen);
+  markSeenRef.current = markSeen;
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // post id -> folders that already hold it. Those posts are shown greyed out and cannot be picked.
   const [savedIn, setSavedIn] = useState<Record<string, string[]>>({});
@@ -69,6 +74,12 @@ const Feed: React.FC<FeedProps> = ({
     setSavedIn({});
     knownItems.current = new Map();
   }, [platform, username]);
+
+  // Only a fresh load counts as a visit. Reading markSeen through a ref keeps a later
+  // favorites refresh from clearing an update the open feed does not show yet.
+  useEffect(() => {
+    if (status === 'success') markSeenRef.current(platform, username);
+  }, [status, platform, username]);
 
   const lookupSaved = useCallback(
     (items: Post[]) => {
@@ -151,6 +162,7 @@ const Feed: React.FC<FeedProps> = ({
           {stories.length ? `, ${stories.length} story` : ''}
           {cached ? ' (dari cache)' : ''}
         </p>
+        {user && <FavoriteToggle platform={platform} username={username} />}
         {user ? (
           <button
             type="button"

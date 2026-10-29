@@ -135,6 +135,33 @@ class UserSession(Base):
     user: Mapped[User] = relationship(lazy="joined")
 
 
+class Favorite(Base):
+    """An account pinned to the feed page, with what was last seen there to spot updates."""
+
+    __tablename__ = "favorites"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    platform: Mapped[str] = mapped_column(String(20))
+    username: Mapped[str] = mapped_column(String(100))
+    avatar_url: Mapped[str | None] = mapped_column(Text)
+    post_count: Mapped[int | None] = mapped_column(Integer)
+    seen_post_count: Mapped[int | None] = mapped_column(Integer)
+    latest_story_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    seen_story_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    check_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+# Usernames are case insensitive on both platforms.
+Index(
+    "uq_favorites_platform_username",
+    Favorite.platform,
+    func.lower(Favorite.username),
+    unique=True,
+)
+
+
 def build_engine(database_url: str) -> AsyncEngine:
     return create_async_engine(database_url, pool_pre_ping=True)
 

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BrowserRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './auth/AuthContext';
+import FavoritesBar from './favorites/FavoritesBar';
+import { FavoritesProvider } from './favorites/FavoritesContext';
 import Feed, { FeedStatus } from './components/Feed';
 import FeedControls from './components/FeedControls';
 import FolderPage from './components/FolderPage';
@@ -126,62 +128,69 @@ function App() {
 
   return (
     <AuthProvider>
-      <Router>
-        <div className="min-h-screen bg-gradient-to-br from-purple-100 to-pink-100">
-          <Header platform={platform} />
-          <main className="container mx-auto px-4 py-8">
-            <Routes>
-              <Route path="/login" element={<Login />} />
-              <Route
-                path="/library"
-                element={
-                  <RequireAuth>
-                    <LibraryPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/library/:folderId"
-                element={
-                  <RequireAuth>
-                    <FolderPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/"
-                element={
-                  <>
-                    <FeedControls
-                      platform={platform}
-                      username={username}
-                      isLoading={feed.status === 'loading'}
-                      onSubmit={handleSearch}
-                      onRefresh={() => void loadFeed(platform, username, true)}
-                    />
-                    <Feed
-                      status={feed.status}
-                      posts={feed.posts}
-                      platform={platform}
-                      username={username}
-                      errorMessage={feed.errorMessage}
-                      cached={feed.cached}
-                      storiesStatus={feed.storiesStatus}
-                      rate={feed.rate}
-                      hasMore={feed.nextCursor !== null}
-                      isLoadingMore={feed.isLoadingMore}
-                      loadMoreError={feed.loadMoreError}
-                      onRetry={() => void loadFeed(platform, username)}
-                      onLoadMore={() => void loadMore()}
-                    />
-                  </>
-                }
-              />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </main>
-        </div>
-      </Router>
+      <FavoritesProvider>
+        <Router>
+          <div className="min-h-screen bg-gradient-to-br from-purple-100 to-pink-100">
+            <Header platform={platform} />
+            <main className="container mx-auto px-4 py-8">
+              <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route
+                  path="/library"
+                  element={
+                    <RequireAuth>
+                      <LibraryPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="/library/:folderId"
+                  element={
+                    <RequireAuth>
+                      <FolderPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="/"
+                  element={
+                    <>
+                      <FavoritesBar
+                        activePlatform={platform}
+                        activeUsername={username}
+                        onOpen={handleSearch}
+                      />
+                      <FeedControls
+                        platform={platform}
+                        username={username}
+                        isLoading={feed.status === 'loading'}
+                        onSubmit={handleSearch}
+                        onRefresh={() => void loadFeed(platform, username, true)}
+                      />
+                      <Feed
+                        status={feed.status}
+                        posts={feed.posts}
+                        platform={platform}
+                        username={username}
+                        errorMessage={feed.errorMessage}
+                        cached={feed.cached}
+                        storiesStatus={feed.storiesStatus}
+                        rate={feed.rate}
+                        hasMore={feed.nextCursor !== null}
+                        isLoadingMore={feed.isLoadingMore}
+                        loadMoreError={feed.loadMoreError}
+                        onRetry={() => void loadFeed(platform, username)}
+                        onLoadMore={() => void loadMore()}
+                      />
+                    </>
+                  }
+                />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </main>
+          </div>
+        </Router>
+      </FavoritesProvider>
     </AuthProvider>
   );
 }

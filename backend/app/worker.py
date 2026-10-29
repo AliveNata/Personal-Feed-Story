@@ -4,12 +4,14 @@ import logging
 from typing import Any, ClassVar
 
 import httpx
+from arq import cron, func
 from arq.connections import RedisSettings
 from redis import Redis
 
 from app.config import get_settings
 from app.db import build_engine, build_session_factory
 from app.factory import build_sources, build_storage
+from app.favorites import service as favorites
 from app.library.jobs import JobRunner
 from app.library.types import MediaResolver
 
@@ -28,6 +30,12 @@ async def startup(ctx: dict[str, Any]) -> None:
         "instagram": sources.instagram,
     }
     ctx["redis"] = redis
+    ctx["sources"] = sources
+    ctx["session_factory"] = build_session_factory(engine)
+    ctx["delays"] = {
+        "instagram": settings.instagram_delay_seconds,
+        "tiktok": settings.tiktok_delay_seconds,
+    }
     ctx["engine"] = engine
     ctx["http_client"] = http_client
     ctx["runner"] = JobRunner(
@@ -53,8 +61,31 @@ async def download_job(ctx: dict[str, Any], job_id: str) -> None:
     await runner.run(job_id)
 
 
+async def check_favorites(ctx: dict[str, Any]) -> None:
+    redis: Redis = ctx["redis"]
+    sources = ctx["sources"]
+    redis.set(favorites.CHECKING_KEY, "1", ex=favorites.CHECKING_TTL_SECONDS)
+    try:
+        await favorites.check_all(
+            ctx["session_factory"],
+            {"tiktok": sources.tiktok, "instagram": sources.instagram},
+            sources.budget,
+            ctx["delays"],
+        )
+    finally:
+        redis.delete(favorites.CHECKING_KEY)
+
+
 class WorkerSettings:
-    functions: ClassVar = [download_job]
+    functions: ClassVar = [
+        download_job,
+        # No stored result, so "Cek sekarang" can reuse the fixed job id right after a run.
+        func(check_favorites, keep_result=0),
+    ]
+    cron_jobs: ClassVar = [
+        # Every 2 hours: frequent enough for a hint, light on the request budget.
+        cron(check_favorites, hour=set(range(0, 24, 2)), minute=17, keep_result=0),
+    ]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
