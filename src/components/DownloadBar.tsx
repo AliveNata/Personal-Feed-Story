@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DownloadJob, Folder, Platform } from '../types';
 import { ApiError, createDownload, fetchFolders, fetchJob } from '../utils/api';
+import FolderPicker from './FolderPicker';
 import { TrackedJob } from './downloadState';
 import { focusRing, primaryButton, secondaryButton } from './ui';
 
@@ -151,21 +152,7 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
               <label htmlFor="download-folder" className="block text-sm font-semibold text-gray-700 mb-1">
                 Simpan ke folder
               </label>
-              <input
-                id="download-folder"
-                list="download-folder-options"
-                value={folderName}
-                onChange={(event) => setFolderName(event.target.value)}
-                placeholder="Nama folder baru atau yang sudah ada"
-                maxLength={100}
-                required
-                className={`w-full min-h-[44px] px-3 border border-gray-300 rounded-md text-gray-900 ${focusRing}`}
-              />
-              <datalist id="download-folder-options">
-                {folders.map((folder) => (
-                  <option key={folder.id} value={folder.name} />
-                ))}
-              </datalist>
+              <FolderPicker id="download-folder" value={folderName} folders={folders} onChange={setFolderName} />
             </div>
             <div className="flex gap-2">
               <button type="submit" className={`flex-1 md:flex-none ${primaryButton}`} disabled={isSubmitting || isJobActive}>
