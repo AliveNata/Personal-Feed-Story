@@ -1,9 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Maximize2, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Maximize2,
+  Minimize2,
+  Pause,
+  Play,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
 import { MediaItem } from '../types';
 import { formatBytes } from '../utils/api';
 import { ConfirmDelete, focusRing, secondaryButton } from './ui';
-import ZoomableImage from './ZoomableImage';
+import ZoomableMedia from './ZoomableMedia';
 import { MAX_SCALE, useZoom } from './zoom';
 
 const ZOOM_STEP = 1.5;
@@ -40,7 +50,29 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
   const stageRef = useRef<HTMLDivElement>(null);
   const { zoom, setZoom, reset, zoomAt } = useZoom();
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const isPhoto = item.mediaType === 'photo';
+  const isVideo = item.mediaType === 'video';
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  // Track play state for the toolbar button, which stands in for the hidden native controls
+  // while a video is zoomed.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const sync = () => setIsPlaying(!video.paused);
+    video.addEventListener('play', sync);
+    video.addEventListener('pause', sync);
+    sync();
+    return () => {
+      video.removeEventListener('play', sync);
+      video.removeEventListener('pause', sync);
+    };
+  }, [item.id]);
+
+  const togglePlay = () => {
+    const video = videoRef.current;
+    if (video) void (video.paused ? video.play() : video.pause());
+  };
 
   // A new file starts unzoomed.
   useEffect(() => reset(), [item.id, reset]);
@@ -74,7 +106,6 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
       if (event.key === 'ArrowLeft' && onPrevious) onPrevious();
       if (event.key === 'ArrowRight' && onNext) onNext();
       if (event.key === 'f') toggleFullscreen();
-      if (!isPhoto) return;
       if (event.key === '+' || event.key === '=') zoomAt(ZOOM_STEP);
       if (event.key === '-') zoomAt(1 / ZOOM_STEP);
       if (event.key === '0') reset();
@@ -98,36 +129,48 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
             {position} / {total}
           </span>
           <div className="flex items-center gap-2">
-            {isPhoto && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => zoomAt(1 / ZOOM_STEP)}
-                  disabled={zoom.scale <= 1}
-                  aria-label="Perkecil"
-                  className={navButton}
-                >
-                  <ZoomOut className="h-5 w-5" aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  onClick={reset}
-                  aria-label="Ukuran asli"
-                  className={`min-w-[3.5rem] rounded-full px-2 text-sm tabular-nums text-white ${focusRing}`}
-                >
-                  {Math.round(zoom.scale * 100)}%
-                </button>
-                <button
-                  type="button"
-                  onClick={() => zoomAt(ZOOM_STEP)}
-                  disabled={zoom.scale >= MAX_SCALE}
-                  aria-label="Perbesar"
-                  className={navButton}
-                >
-                  <ZoomIn className="h-5 w-5" aria-hidden="true" />
-                </button>
-              </>
+            {isVideo && zoom.scale > 1 && (
+              <button
+                type="button"
+                onClick={togglePlay}
+                aria-label={isPlaying ? 'Jeda video' : 'Putar video'}
+                className={navButton}
+              >
+                {isPlaying ? (
+                  <Pause className="h-5 w-5" aria-hidden="true" />
+                ) : (
+                  <Play className="h-5 w-5" aria-hidden="true" />
+                )}
+              </button>
             )}
+            <>
+              <button
+                type="button"
+                onClick={() => zoomAt(1 / ZOOM_STEP)}
+                disabled={zoom.scale <= 1}
+                aria-label="Perkecil"
+                className={navButton}
+              >
+                <ZoomOut className="h-5 w-5" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                onClick={reset}
+                aria-label="Ukuran asli"
+                className={`min-w-[3.5rem] rounded-full px-2 text-sm tabular-nums text-white ${focusRing}`}
+              >
+                {Math.round(zoom.scale * 100)}%
+              </button>
+              <button
+                type="button"
+                onClick={() => zoomAt(ZOOM_STEP)}
+                disabled={zoom.scale >= MAX_SCALE}
+                aria-label="Perbesar"
+                className={navButton}
+              >
+                <ZoomIn className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </>
             <button
               type="button"
               onClick={toggleFullscreen}
@@ -148,25 +191,17 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
         </div>
 
         <div className="relative flex min-h-0 flex-1 items-center justify-center px-2">
-          {item.mediaType === 'video' ? (
-            <video
-              key={item.id}
-              src={item.fileUrl}
-              poster={item.thumbnailUrl ?? undefined}
-              controls
-              playsInline
-              className="max-h-full max-w-full"
-            />
-          ) : (
-            <ZoomableImage
-              key={item.id}
-              src={item.fileUrl}
-              alt={item.caption || `Foto dari @${item.authorUsername}`}
-              zoom={zoom}
-              setZoom={setZoom}
-              zoomAt={zoomAt}
-            />
-          )}
+          <ZoomableMedia
+            key={item.id}
+            kind={item.mediaType}
+            src={item.fileUrl}
+            alt={item.caption || `${isVideo ? 'Video' : 'Foto'} dari @${item.authorUsername}`}
+            poster={item.thumbnailUrl ?? undefined}
+            videoRef={videoRef}
+            zoom={zoom}
+            setZoom={setZoom}
+            zoomAt={zoomAt}
+          />
           <button
             type="button"
             onClick={onPrevious}

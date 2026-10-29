@@ -4,17 +4,37 @@ import { MAX_SCALE, MIN_SCALE, Point, ZoomState, clamp } from './zoom';
 const WHEEL_STEP = 0.0015;
 const DOUBLE_TAP_SCALE = 2.5;
 
-interface ZoomableImageProps {
+// Pointer travel below this still counts as a tap, not a pan.
+const TAP_SLOP_PX = 6;
+
+interface ZoomableMediaProps {
+  kind: 'photo' | 'video';
   src: string;
   alt: string;
+  poster?: string;
+  videoRef?: React.RefObject<HTMLVideoElement>;
   zoom: ZoomState;
   setZoom: React.Dispatch<React.SetStateAction<ZoomState>>;
   zoomAt: (factor: number, at?: Point) => void;
 }
 
-/** Wheel, double click, drag to pan, and two finger pinch on touch screens. */
-const ZoomableImage: React.FC<ZoomableImageProps> = ({ src, alt, zoom, setZoom, zoomAt }) => {
+/**
+ * Wheel, drag to pan and two finger pinch for photos and videos, double click for photos.
+ * Videos keep their native controls at 100%. Zoomed in, the controls would be scaled and
+ * pushed off screen with the video, so they hide and a tap plays or pauses instead.
+ */
+const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
+  kind,
+  src,
+  alt,
+  poster,
+  videoRef,
+  zoom,
+  setZoom,
+  zoomAt,
+}) => {
   const frameRef = useRef<HTMLDivElement>(null);
+  const tapStart = useRef<Point | null>(null);
   const pointers = useRef(new Map<number, Point>());
   const pinchStart = useRef<{ distance: number; scale: number } | null>(null);
   const lastPan = useRef<Point | null>(null);
@@ -42,6 +62,8 @@ const ZoomableImage: React.FC<ZoomableImageProps> = ({ src, alt, zoom, setZoom, 
   }, [zoomAt]);
 
   const handleDoubleClick = (event: React.MouseEvent) => {
+    // On a video, double click is too close to the player's own clicks.
+    if (kind === 'video') return;
     if (zoom.scale > 1) {
       setZoom({ scale: 1, offset: { x: 0, y: 0 } });
     } else {
@@ -50,14 +72,28 @@ const ZoomableImage: React.FC<ZoomableImageProps> = ({ src, alt, zoom, setZoom, 
   };
 
   const handlePointerDown = (event: React.PointerEvent) => {
-    event.currentTarget.setPointerCapture(event.pointerId);
     pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    // An unzoomed video keeps the pointer, so its seek bar and buttons still work.
+    // Capture only once there is something for us to do: a pinch, or a pan when zoomed.
+    const ownsGesture = kind === 'photo' || zoom.scale > 1 || pointers.current.size === 2;
+    if (ownsGesture) {
+      pointers.current.forEach((_, id) => {
+        if (event.currentTarget.hasPointerCapture(id)) return;
+        try {
+          event.currentTarget.setPointerCapture(id);
+        } catch {
+          // The other finger may already be gone.
+        }
+      });
+    }
     if (pointers.current.size === 2) {
       const [a, b] = Array.from(pointers.current.values());
       pinchStart.current = { distance: Math.hypot(a.x - b.x, a.y - b.y), scale: zoom.scale };
       lastPan.current = null;
+      tapStart.current = null;
     } else {
       lastPan.current = { x: event.clientX, y: event.clientY };
+      tapStart.current = { x: event.clientX, y: event.clientY };
     }
   };
 
@@ -88,12 +124,27 @@ const ZoomableImage: React.FC<ZoomableImageProps> = ({ src, alt, zoom, setZoom, 
   };
 
   const handlePointerUp = (event: React.PointerEvent) => {
+    const start = tapStart.current;
+    const isTap =
+      start !== null &&
+      Math.hypot(event.clientX - start.x, event.clientY - start.y) < TAP_SLOP_PX &&
+      pointers.current.size === 1;
+    if (isTap && kind === 'video' && zoom.scale > 1) {
+      const video = videoRef?.current;
+      if (video) void (video.paused ? video.play() : video.pause());
+    }
+    tapStart.current = null;
     pointers.current.delete(event.pointerId);
     if (pointers.current.size < 2) pinchStart.current = null;
     lastPan.current = pointers.current.size === 1 ? Array.from(pointers.current.values())[0] : null;
   };
 
   const isZoomed = zoom.scale > 1;
+  const mediaStyle = {
+    transform: `translate(${zoom.offset.x}px, ${zoom.offset.y}px) scale(${zoom.scale})`,
+  };
+  const mediaClass =
+    'max-h-full max-w-full object-contain transition-transform duration-75 ease-out motion-reduce:transition-none';
 
   return (
     <div
@@ -105,20 +156,25 @@ const ZoomableImage: React.FC<ZoomableImageProps> = ({ src, alt, zoom, setZoom, 
       onPointerCancel={handlePointerUp}
       // touch-none: the browser would otherwise scroll or zoom the page on pinch.
       className={`flex h-full w-full touch-none select-none items-center justify-center overflow-hidden ${
-        isZoomed ? 'cursor-grab active:cursor-grabbing' : 'cursor-zoom-in'
+        isZoomed ? 'cursor-grab active:cursor-grabbing' : kind === 'photo' ? 'cursor-zoom-in' : ''
       }`}
     >
-      <img
-        src={src}
-        alt={alt}
-        draggable={false}
-        style={{
-          transform: `translate(${zoom.offset.x}px, ${zoom.offset.y}px) scale(${zoom.scale})`,
-        }}
-        className="max-h-full max-w-full object-contain transition-transform duration-75 ease-out motion-reduce:transition-none"
-      />
+      {kind === 'video' ? (
+        <video
+          ref={videoRef}
+          src={src}
+          poster={poster}
+          controls={!isZoomed}
+          playsInline
+          aria-label={alt}
+          style={mediaStyle}
+          className={mediaClass}
+        />
+      ) : (
+        <img src={src} alt={alt} draggable={false} style={mediaStyle} className={mediaClass} />
+      )}
     </div>
   );
 };
 
-export default ZoomableImage;
+export default ZoomableMedia;
