@@ -6,6 +6,7 @@ import {
   Folder,
   HighlightItemsResponse,
   HighlightsResponse,
+  ReelsResponse,
   MediaItem,
   MediaSource,
   MediaType,
@@ -120,6 +121,12 @@ export const fetchHighlights = (username: string): Promise<HighlightsResponse> =
   request<HighlightsResponse>(
     `/api/instagram/highlights?username=${encodeURIComponent(username)}`,
   );
+
+export const fetchReels = (username: string, cursor: string | null): Promise<ReelsResponse> => {
+  const params = new URLSearchParams({ username });
+  if (cursor) params.set('cursor', cursor);
+  return request<ReelsResponse>(`/api/instagram/reels?${params.toString()}`);
+};
 
 export const fetchHighlightItems = (
   username: string,

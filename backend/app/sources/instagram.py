@@ -51,6 +51,12 @@ COOLDOWN_AFTER_FEEDBACK_SECONDS = 30 * 60
 # Media URLs seen in the feed are reused for downloads, so the worker sends no extra queries.
 # IG CDN links stay valid for days, half a day keeps them well inside that.
 MEDIA_CACHE_TTL_SECONDS = 12 * 60 * 60
+# Reels cost one query per reel (instaloader fetches each one by shortcode), so pages stay small
+# and stop while most of the budget is still free for feeds and downloads.
+REELS_PAGE_SIZE = 6
+# Profile lookup, the reels list page, then one query per reel.
+REELS_PAGE_COST = REELS_PAGE_SIZE + 2
+REELS_BUDGET_SHARE = 0.6
 
 T = TypeVar("T")
 
@@ -228,6 +234,19 @@ def _safe_cover(highlight: Any, attribute: str) -> str:
     except (KeyError, TypeError):
         logger.info("highlight %s has no %s", getattr(highlight, "title", "?"), attribute)
         return ""
+
+
+def _has_more(iterator: Any) -> bool:
+    """Whether a NodeIterator has items left, without pulling one (that would cost a query).
+
+    instaloader has no public API for this, so read its page state and assume more when the
+    shape is unexpected.
+    """
+    try:
+        data = iterator._data
+        return bool(iterator._page_index < len(data["edges"]) or data["page_info"]["has_next_page"])
+    except (AttributeError, KeyError, TypeError):
+        return True
 
 
 class CursorStore:
@@ -471,6 +490,52 @@ class InstagramSource:
             post_count=profile.mediacount,
             latest_story_at=latest_story_at,
         )
+
+    async def fetch_reels(
+        self, username: str, cursor: str | None
+    ) -> tuple[str, list[Post], str | None]:
+        """One page of the Reels tab: (status, reels, next cursor)."""
+        if not self._loader.context.is_logged_in:
+            return "login_required", [], None
+        if self._budget is not None:
+            wait = await asyncio.to_thread(
+                self._budget.wait_for_share, PLATFORM, REELS_PAGE_COST, REELS_BUDGET_SHARE
+            )
+            if wait > 0:
+                minutes = max(1, math.ceil(wait / 60))
+                raise RateLimitedError(
+                    "Reels dijeda biar akun aman, sisa jatah request Instagram disimpan buat "
+                    f"feed dan download. Coba lagi sekitar {minutes} menit",
+                    retry_after=wait,
+                )
+        posts, next_cursor = await self._run(
+            lambda: self._fetch_reels_sync(username, cursor), cost=REELS_PAGE_COST
+        )
+        return ("available" if posts or cursor else "none"), posts, next_cursor
+
+    def _fetch_reels_sync(self, username: str, cursor: str | None) -> tuple[list[Post], str | None]:
+        profile = instaloader.Profile.from_username(self._loader.context, username)
+        iterator = profile.get_reels()
+        if cursor:
+            state = self._cursors.get(cursor) if self._cursors else None
+            if state is None:
+                raise UpstreamError("Halaman reels berikutnya kedaluwarsa, buka ulang Reels")
+            try:
+                iterator.thaw(instaloader.FrozenNodeIterator(**state))
+            except InvalidArgumentException as exc:
+                raise UpstreamError(
+                    "Halaman reels berikutnya kedaluwarsa, buka ulang Reels"
+                ) from exc
+
+        posts: list[Post] = []
+        for item in islice(iterator, REELS_PAGE_SIZE):
+            posts.append(map_instagram_post(item, instagram_slides(item)))
+            # Downloads then reuse these URLs instead of another query per reel.
+            self._cache_post(item.shortcode, item)
+        next_cursor = None
+        if self._cursors is not None and _has_more(iterator):
+            next_cursor = self._cursors.put(iterator.freeze()._asdict())
+        return posts, next_cursor
 
     async def list_highlights(self, username: str) -> tuple[str, list[Highlight]]:
         if not self._loader.context.is_logged_in:

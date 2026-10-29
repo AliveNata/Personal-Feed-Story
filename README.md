@@ -8,6 +8,7 @@ Feed viewer for TikTok and Instagram accounts, with a private download library. 
 - "Tambah file" uploads your own photos and videos into a folder (drag and drop or file picker). The tab is picked from the file extension.
 - Feed cards are carousels (all slides of an Instagram carousel or a TikTok slideshow) with arrows, dots and autoplay that pauses on hover, focus, video playback and off screen.
 - "Muat lebih banyak" loads older posts. Instagram pages by cursor, TikTok by 30 day windows back to one year.
+- Instagram Reels load on demand, 6 per page with "Muat reels lagi" for the rest. Each page costs about 8 requests (one per reel), so pages are cached in Redis like the feed, and Reels pause once 60% of the Instagram budget is used, leaving the rest for feeds and downloads. Downloads reuse the URLs from the Reels page.
 - Instagram highlights load on demand. Story and highlight items share ids, so a downloaded item is greyed out wherever it shows up.
 - Folders have Post, Story and Upload tabs, each split into Foto and Video.
 - Favorites (login required): "Favoritkan" on an open feed pins the account to a row above the search form, with its profile photo. A blue ring means a new post (TikTok and Instagram) or a new Instagram story since you last opened that feed. The worker checks every 2 hours, "Cek sekarang" checks right away.
@@ -186,6 +187,8 @@ Public:
 
 - `GET /api/feed?platform=tiktok|instagram&username=<name>&limit=12&refresh=false`
 - `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me` (returns `{"user": null}` when logged out)
+
+- `GET /api/instagram/reels?username=<name>&cursor=&refresh=false`
 
 Login required:
 

@@ -32,6 +32,7 @@ from app.models import (
     HighlightsResponse,
     Platform,
     RateInfo,
+    ReelsResponse,
 )
 from app.ratelimit import RateBudget
 from app.sources import FeedSource
@@ -175,6 +176,38 @@ async def get_feed(
         next_cursor=page.next_cursor,
         stories_status=page.stories_status,
         rate=rate_info(budget, platform),
+    )
+
+
+@app.get("/api/instagram/reels", response_model=ReelsResponse)
+async def list_reels(
+    username: Annotated[str, Query(pattern=USERNAME_PATTERN)],
+    instagram: Annotated[InstagramSource, Depends(get_instagram)],
+    cache: Annotated[FeedCache, Depends(get_cache)],
+    budget: Annotated[RateBudget | None, Depends(get_budget)],
+    cursor: Annotated[str | None, Query(pattern=CURSOR_PATTERN)] = None,
+    refresh: bool = False,
+) -> ReelsResponse:
+    username = username.removeprefix("@")
+    # Reels are the most expensive Instagram call here, so a repeat view must not pay again.
+    key = feed_cache_key("instagram-reels", username, cursor)
+    cached_page = None if refresh else await cache.get(key)
+    if cached_page is not None:
+        return ReelsResponse(
+            status="available" if cached_page.posts else "none",
+            reels=cached_page.posts,
+            next_cursor=cached_page.next_cursor,
+            cached=True,
+            rate=rate_info(budget, "instagram"),
+        )
+    status, reels, next_cursor = await instagram.fetch_reels(username, cursor)
+    if status != "login_required":
+        await cache.set(key, FeedPage(posts=reels, next_cursor=next_cursor, stories_status="none"))
+    return ReelsResponse(
+        status=status,
+        reels=reels,
+        next_cursor=next_cursor,
+        rate=rate_info(budget, "instagram"),
     )
 
 

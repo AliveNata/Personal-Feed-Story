@@ -46,3 +46,24 @@ def test_cooldown_blocks_even_with_budget_left() -> None:
         budget.ensure_available("instagram")
     assert caught.value.retry_after == 120
     assert "2 menit" in str(caught.value)
+
+
+def test_wait_for_share_is_zero_while_cost_fits_inside_share() -> None:
+    # Arrange
+    budget = make_budget(limit=100)
+    budget.record("instagram", 50)
+
+    # Act / Assert
+    assert budget.wait_for_share("instagram", 8, 0.6) == 0
+
+
+def test_wait_for_share_waits_until_old_hits_expire() -> None:
+    # Arrange
+    budget = make_budget(limit=100)
+    budget.record("instagram", 55)
+
+    # Act
+    wait = budget.wait_for_share("instagram", 8, 0.6)
+
+    # Assert
+    assert 0 < wait <= 900

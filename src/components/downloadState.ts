@@ -35,16 +35,16 @@ export const downloadStates = (tracked: TrackedJob | null): Record<string, ItemD
   return states;
 };
 
-export type ContentSection = 'story' | 'highlight' | 'post';
+export type ContentSection = 'story' | 'highlight' | 'reel' | 'post';
 
-const SECTION_ORDER: ContentSection[] = ['story', 'highlight', 'post'];
+const SECTION_ORDER: ContentSection[] = ['story', 'highlight', 'reel', 'post'];
 
 /** "2 story & 1 highlight & 3 post", only the sections that are in the selection. */
 export const describeSelection = (
   ids: string[],
   sectionOf: (id: string) => ContentSection,
 ): string => {
-  const counts: Record<ContentSection, number> = { story: 0, highlight: 0, post: 0 };
+  const counts: Record<ContentSection, number> = { story: 0, highlight: 0, reel: 0, post: 0 };
   ids.forEach((id) => {
     counts[sectionOf(id)] += 1;
   });

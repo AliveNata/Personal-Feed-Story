@@ -8,6 +8,7 @@ import { Platform, Post, RateInfo, StoriesStatus } from '../types';
 import { formatRelativeTime, lookupDownloaded } from '../utils/api';
 import DownloadBar from './DownloadBar';
 import Highlights from './Highlights';
+import Reels from './Reels';
 import PostCarousel from './PostCarousel';
 import RateNotice from './RateNotice';
 import SelectToggle from './SelectToggle';
@@ -78,6 +79,7 @@ const Feed: React.FC<FeedProps> = ({
   const knownItems = useRef<Map<string, Post>>(new Map());
   // Highlight items share the story id format, so remember which ids came from a highlight.
   const highlightIds = useRef<Set<string>>(new Set());
+  const reelIds = useRef<Set<string>>(new Set());
   const [trackedJob, setTrackedJob] = useState<TrackedJob | null>(null);
 
   // A different account means different post ids, so old state would point at nothing.
@@ -86,6 +88,7 @@ const Feed: React.FC<FeedProps> = ({
     setSavedIn({});
     knownItems.current = new Map();
     highlightIds.current = new Set();
+    reelIds.current = new Set();
   }, [platform, username]);
 
   // Only a fresh load counts as a visit. Reading markSeen through a ref keeps a later
@@ -180,7 +183,13 @@ const Feed: React.FC<FeedProps> = ({
   const storiesMessage = STORIES_MESSAGES[storiesStatus];
   const storyIds = new Set(stories.map((story) => story.id));
   const sectionOf = (id: string): ContentSection =>
-    storyIds.has(id) ? 'story' : highlightIds.current.has(id) ? 'highlight' : 'post';
+    storyIds.has(id)
+      ? 'story'
+      : highlightIds.current.has(id)
+        ? 'highlight'
+        : reelIds.current.has(id)
+          ? 'reel'
+          : 'post';
   const selectedIds = Array.from(selected);
 
   return (
@@ -254,6 +263,25 @@ const Feed: React.FC<FeedProps> = ({
           onSelectMany={selectMany}
           onItemsLoaded={(items) => {
             items.forEach((item) => highlightIds.current.add(item.id));
+            lookupSaved(items);
+          }}
+        />
+      )}
+
+      {platform === 'instagram' && (
+        <Reels
+          username={username}
+          isSelectable={user !== null}
+          selected={selected}
+          savedIn={savedIn}
+          downloadStates={itemStates}
+          percentFor={(id) => downloadPercent(trackedJob, id)}
+          isLocked={isLocked}
+          isPending={isPending}
+          onToggle={toggle}
+          onSelectMany={selectMany}
+          onItemsLoaded={(items) => {
+            items.forEach((item) => reelIds.current.add(item.id));
             lookupSaved(items);
           }}
         />

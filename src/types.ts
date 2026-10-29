@@ -54,6 +54,14 @@ export interface HighlightsResponse {
   rate: RateInfo | null;
 }
 
+export interface ReelsResponse {
+  status: 'available' | 'none' | 'login_required';
+  reels: Post[];
+  nextCursor: string | null;
+  cached: boolean;
+  rate: RateInfo | null;
+}
+
 export interface HighlightItemsResponse {
   items: Post[];
   rate: RateInfo | null;

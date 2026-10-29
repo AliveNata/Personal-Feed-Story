@@ -76,6 +76,14 @@ class HighlightsResponse(CamelModel):
     rate: RateInfo | None = None
 
 
+class ReelsResponse(CamelModel):
+    status: Literal["available", "none", "login_required"]
+    reels: list[Post]
+    next_cursor: str | None = None
+    cached: bool = False
+    rate: RateInfo | None = None
+
+
 class HighlightItemsResponse(CamelModel):
     items: list[Post]
     rate: RateInfo | None = None

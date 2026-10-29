@@ -7,10 +7,12 @@ import pytest
 from instaloader.exceptions import AbortDownloadException
 
 from app.errors import RateLimitedError
+from app.ratelimit import RateBudget
 from app.sources.instagram import (
     CachedMedia,
     InstagramSource,
     MediaCache,
+    _has_more,
     _to_highlight,
     instagram_media_urls,
     instagram_slides,
@@ -244,3 +246,45 @@ def test_feedback_required_becomes_rate_limit() -> None:
     with pytest.raises(RateLimitedError) as caught:
         source._guarded(blocked)
     assert caught.value.retry_after == 30 * 60
+
+
+async def test_reels_pause_when_budget_share_is_used() -> None:
+    # Arrange
+    redis = fakeredis.FakeRedis()
+    budget = RateBudget(redis, {"instagram": (100, 900)})
+    budget.record("instagram", 55)
+    loader = SimpleNamespace(context=SimpleNamespace(is_logged_in=True))
+    source = InstagramSource(loader, True, budget=budget)  # type: ignore[arg-type]
+
+    # Act / Assert
+    with pytest.raises(RateLimitedError) as caught:
+        await source.fetch_reels("someone", None)
+    assert "Reels dijeda" in str(caught.value)
+    assert caught.value.retry_after
+
+
+async def test_reels_need_a_session() -> None:
+    # Arrange
+    loader = SimpleNamespace(context=SimpleNamespace(is_logged_in=False))
+    source = InstagramSource(loader, True)  # type: ignore[arg-type]
+
+    # Act
+    status, reels, cursor = await source.fetch_reels("someone", None)
+
+    # Assert
+    assert (status, reels, cursor) == ("login_required", [], None)
+
+
+def test_has_more_reads_page_state_without_pulling_items() -> None:
+    # Arrange
+    last_page = SimpleNamespace(
+        _page_index=2, _data={"edges": [{}, {}], "page_info": {"has_next_page": False}}
+    )
+    mid_page = SimpleNamespace(
+        _page_index=1, _data={"edges": [{}, {}], "page_info": {"has_next_page": False}}
+    )
+
+    # Act / Assert
+    assert _has_more(last_page) is False
+    assert _has_more(mid_page) is True
+    assert _has_more(object()) is True

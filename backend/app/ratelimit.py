@@ -79,6 +79,35 @@ class RateBudget:
             raise RateLimitedError(wait_message(wait), retry_after=wait)
         return status
 
+    def wait_for_share(self, platform: str, cost: int, share: float) -> int:
+        """Seconds until `cost` more requests fit inside `share` of the budget, 0 when they do.
+
+        For heavy optional features (reels): they stop early so the rest of the budget is kept
+        for feeds and downloads.
+        """
+        limit, window = self._limits[platform]
+        hits_key, _ = self._keys(platform)
+        status = self.status(platform)
+        allowed = math.floor(limit * share)
+        if status.wait_seconds > 0:
+            return status.wait_seconds
+        if cost > allowed:
+            # Can never fit, waiting would not help either.
+            return window
+        overflow = status.used + cost - allowed
+        if overflow <= 0:
+            return 0
+        try:
+            # The overflow-th oldest hit has to expire before there is room.
+            oldest = self._redis.zrange(hits_key, overflow - 1, overflow - 1, withscores=True)
+        except RedisError as exc:
+            logger.warning("rate budget unavailable for %s: %s", platform, exc)
+            return 0
+        if not oldest:
+            return 0
+        expires_at = float(oldest[0][1])  # type: ignore[index]
+        return max(1, math.ceil(expires_at + window - time.time()))
+
     def record(self, platform: str, count: int = 1) -> None:
         _, window = self._limits[platform]
         hits_key, _ = self._keys(platform)
