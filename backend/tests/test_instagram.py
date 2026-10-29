@@ -5,7 +5,11 @@ from types import SimpleNamespace
 import fakeredis
 import instaloader
 import pytest
-from instaloader.exceptions import AbortDownloadException, ProfileNotExistsException
+from instaloader.exceptions import (
+    AbortDownloadException,
+    ConnectionException,
+    ProfileNotExistsException,
+)
 
 from app.errors import RateLimitedError
 from app.ratelimit import RateBudget
@@ -326,3 +330,24 @@ def test_profile_still_missing_when_api_has_no_user(monkeypatch: pytest.MonkeyPa
     # Act / Assert
     with pytest.raises(ProfileNotExistsException):
         source._profile("ghost")
+
+
+def test_profile_api_429_is_a_rate_limit_not_a_missing_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    def page_without_data(context: object, username: str) -> None:
+        raise ProfileNotExistsException("nope")
+
+    def limited(path: str, params: dict[str, str]) -> None:
+        raise ConnectionException(f"JSON Query to {path}: 429 Too Many Requests")
+
+    monkeypatch.setattr(instaloader.Profile, "from_username", page_without_data)
+    context = SimpleNamespace(is_logged_in=True, get_json=limited)
+    budget = RateBudget(fakeredis.FakeRedis(), {"instagram": (100, 900)})
+    source = InstagramSource(SimpleNamespace(context=context), True, budget=budget)  # type: ignore[arg-type]
+
+    # Act / Assert
+    with pytest.raises(RateLimitedError):
+        source._guarded(lambda: source._profile("linuarinuja_new"))
+    assert budget.status("instagram").wait_seconds > 0

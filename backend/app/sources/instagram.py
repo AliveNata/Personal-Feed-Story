@@ -443,6 +443,12 @@ class InstagramSource:
                 )
             except (ConnectionException, AbortDownloadException) as api_error:
                 logger.warning("instagram profile API failed for %s: %s", username, api_error)
+                if isinstance(api_error, TooManyRequestsException) or "429" in str(api_error):
+                    # A limited session is also why the page came back empty, so this is a
+                    # rate limit, not a missing account.
+                    if self._budget is not None:
+                        self._budget.cooldown(PLATFORM, COOLDOWN_AFTER_429_SECONDS)
+                    raise TooManyRequestsException(str(api_error)) from api_error
                 raise page_error from api_error
             user = (data.get("data") or {}).get("user")
             if not isinstance(user, dict) or not user.get("id"):
