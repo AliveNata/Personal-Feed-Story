@@ -50,6 +50,11 @@ const Header: React.FC<HeaderProps> = ({ platform }) => {
               Library
             </NavLink>
           )}
+          {user && (
+            <NavLink to="/session" className={navClass}>
+              Session
+            </NavLink>
+          )}
           {user ? (
             <button
               type="button"

@@ -12,6 +12,7 @@ from instaloader.exceptions import (
 )
 
 from app.errors import RateLimitedError
+from app.platform_sessions import InvalidSessionError
 from app.ratelimit import RateBudget
 from app.sources.instagram import (
     CachedMedia,
@@ -23,6 +24,7 @@ from app.sources.instagram import (
     instagram_slides,
     map_instagram_post,
     map_instagram_story_item,
+    validate_instagram_cookie,
 )
 
 
@@ -369,3 +371,9 @@ def test_401_please_wait_is_a_rate_limit_with_cooldown() -> None:
     with pytest.raises(RateLimitedError):
         source._guarded(throttled)
     assert budget.status("instagram").wait_seconds > 0
+
+
+def test_pasted_instagram_cookie_needs_a_sessionid() -> None:
+    # Arrange / Act / Assert
+    with pytest.raises(InvalidSessionError):
+        validate_instagram_cookie("csrftoken=abc; mid=xyz")

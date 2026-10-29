@@ -1,4 +1,5 @@
 import {
+  PlatformSessionStatus,
   ActivityResponse,
   DownloadJob,
   Favorite,
@@ -54,10 +55,7 @@ const errorDetail = (body: unknown, status: number): string => {
     : `Request gagal (${status})`;
 };
 
-const request = async <T>(
-  path: string,
-  init: RequestInit & { json?: unknown } = {},
-): Promise<T> => {
+const request = async <T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> => {
   const { json, ...rest } = init;
   const response = await fetch(path, {
     ...rest,
@@ -109,8 +107,7 @@ export const fetchJob = (jobId: string): Promise<DownloadJob> =>
 
 export const fetchFolders = (): Promise<Folder[]> => request<Folder[]>('/api/folders');
 
-export const fetchFolder = (folderId: number): Promise<Folder> =>
-  request<Folder>(`/api/folders/${folderId}`);
+export const fetchFolder = (folderId: number): Promise<Folder> => request<Folder>(`/api/folders/${folderId}`);
 
 export const fetchFolderItems = (
   folderId: number,
@@ -120,9 +117,7 @@ export const fetchFolderItems = (
   request<MediaItem[]>(`/api/folders/${folderId}/items?type=${type}&source=${source}`);
 
 export const fetchHighlights = (username: string): Promise<HighlightsResponse> =>
-  request<HighlightsResponse>(
-    `/api/instagram/highlights?username=${encodeURIComponent(username)}`,
-  );
+  request<HighlightsResponse>(`/api/instagram/highlights?username=${encodeURIComponent(username)}`);
 
 export const fetchReels = (username: string, cursor: string | null): Promise<ReelsResponse> => {
   const params = new URLSearchParams({ username });
@@ -130,10 +125,7 @@ export const fetchReels = (username: string, cursor: string | null): Promise<Ree
   return request<ReelsResponse>(`/api/instagram/reels?${params.toString()}`);
 };
 
-export const fetchHighlightItems = (
-  username: string,
-  highlightId: string,
-): Promise<HighlightItemsResponse> =>
+export const fetchHighlightItems = (username: string, highlightId: string): Promise<HighlightItemsResponse> =>
   request<HighlightItemsResponse>(
     `/api/instagram/highlights/${encodeURIComponent(highlightId)}?username=${encodeURIComponent(username)}`,
   );
@@ -242,8 +234,7 @@ export const formatBytes = (bytes: number): string => {
   return `${value.toLocaleString('id', { maximumFractionDigits: unit === 0 ? 0 : 1 })} ${BYTE_UNITS[unit]}`;
 };
 
-export const fetchFavorites = (): Promise<FavoritesResponse> =>
-  request<FavoritesResponse>('/api/favorites');
+export const fetchFavorites = (): Promise<FavoritesResponse> => request<FavoritesResponse>('/api/favorites');
 
 export const addFavorite = (platform: Platform, username: string): Promise<Favorite> =>
   request<Favorite>('/api/favorites', { method: 'POST', json: { platform, username } });
@@ -277,3 +268,12 @@ export const fetchActivity = (
   const query = params.toString();
   return request<ActivityResponse>(`/api/activity${query ? `?${query}` : ''}`);
 };
+
+export const fetchPlatformSessions = (): Promise<PlatformSessionStatus[]> =>
+  request<PlatformSessionStatus[]>('/api/platform-sessions');
+
+export const savePlatformSession = (platform: Platform, cookie: string): Promise<PlatformSessionStatus> =>
+  request<PlatformSessionStatus>(`/api/platform-sessions/${platform}`, { method: 'PUT', json: { cookie } });
+
+export const deletePlatformSession = (platform: Platform): Promise<PlatformSessionStatus> =>
+  request<PlatformSessionStatus>(`/api/platform-sessions/${platform}`, { method: 'DELETE' });

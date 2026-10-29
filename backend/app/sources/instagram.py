@@ -34,6 +34,12 @@ from redis.exceptions import RedisError
 from app.errors import PrivateAccountError, RateLimitedError, UpstreamError, UserNotFoundError
 from app.library.types import ResolvedPost
 from app.models import FeedPage, Highlight, MediaSlide, Post, StoriesStatus, proxied_media_url
+from app.platform_sessions import (
+    InvalidSessionError,
+    SessionSync,
+    StoredSession,
+    parse_cookie_header,
+)
 from app.ratelimit import RateBudget, wait_message
 from app.sources import ProfileProbe
 
@@ -377,6 +383,9 @@ class InstagramSource:
         media_cache: MediaCache | None = None,
     ) -> None:
         self._loader = loader
+        # The .env / session file loader, used again when the web session is removed.
+        self._default_loader = loader
+        self._session_sync: SessionSync | None = None
         self._include_stories = include_stories
         self._page_size = page_size
         self._budget = budget
@@ -385,7 +394,27 @@ class InstagramSource:
         # instaloader is sync and keeps one HTTP session, so serialize calls through it.
         self._lock = threading.Lock()
 
+    def set_session_sync(self, sync: SessionSync) -> None:
+        self._session_sync = sync
+
+    def use_session(self, stored: StoredSession | None) -> None:
+        """Swap in a session pasted on the web, or back to the .env one with None."""
+        if stored is None:
+            loader = self._default_loader
+        else:
+            username = stored.account_name if stored.verified else ""
+            loader = build_loader(username, None, self._budget)
+            loader.load_session(username, parse_cookie_header(stored.cookie))
+        # Wait for a running query: instaloader is not thread safe.
+        with self._lock:
+            self._loader = loader
+
+    async def _sync(self) -> None:
+        if self._session_sync is not None:
+            await self._session_sync.ensure_current()
+
     async def _run(self, func: Callable[[], T], cost: int) -> T:
+        await self._sync()
         if self._budget is not None:
             await asyncio.to_thread(self._budget.ensure_available, PLATFORM, cost)
         return await asyncio.to_thread(self._guarded, func)
@@ -550,6 +579,7 @@ class InstagramSource:
         return items, "available" if items else "none"
 
     async def probe(self, username: str) -> ProfileProbe:
+        await self._sync()
         logged_in = self._loader.context.is_logged_in
         return await self._run(lambda: self._probe_sync(username), cost=2 if logged_in else 1)
 
@@ -572,6 +602,7 @@ class InstagramSource:
         self, username: str, cursor: str | None
     ) -> tuple[str, list[Post], str | None]:
         """One page of the Reels tab: (status, reels, next cursor)."""
+        await self._sync()
         if not self._loader.context.is_logged_in:
             return "login_required", [], None
         if self._budget is not None:
@@ -615,6 +646,7 @@ class InstagramSource:
         return posts, next_cursor
 
     async def list_highlights(self, username: str) -> tuple[str, list[Highlight]]:
+        await self._sync()
         if not self._loader.context.is_logged_in:
             return "login_required", []
         return await self._run(lambda: self._list_highlights_sync(username), cost=2)
@@ -625,6 +657,7 @@ class InstagramSource:
         return ("available" if highlights else "none"), highlights
 
     async def highlight_items(self, username: str, highlight_id: str) -> list[Post]:
+        await self._sync()
         if not self._loader.context.is_logged_in:
             raise PrivateAccountError("Highlight butuh session Instagram")
         return await self._run(lambda: self._highlight_items_sync(username, highlight_id), cost=3)
@@ -713,3 +746,36 @@ class InstagramSource:
             media_urls=instagram_media_urls(post),
             request_headers={"Referer": "https://www.instagram.com/"},
         )
+
+
+# instaloader's "who am I" query, the same one its test_login uses.
+WHOAMI_QUERY_HASH = "d6f4427fbe92d846298cf93df0b937d3"
+
+
+def validate_instagram_cookie(raw_cookie: str) -> tuple[str, bool]:
+    """(account name, verified) for a pasted Cookie header. One Instagram query.
+
+    When Instagram only says "slow down" the cookie may still be fine, so it is accepted
+    unverified, named after its user id. A rejected or logged out cookie raises.
+    """
+    cookies = parse_cookie_header(raw_cookie)
+    if not cookies.get("sessionid"):
+        raise InvalidSessionError(
+            "Cookie ini tidak punya sessionid. Ambil dari tab instagram.com yang sedang login"
+        )
+    loader = build_loader("", None)
+    loader.load_session("", cookies)
+    try:
+        data = loader.context.graphql_query(WHOAMI_QUERY_HASH, {})
+    except (ConnectionException, AbortDownloadException) as exc:
+        if _is_throttle(exc):
+            logger.warning("instagram throttled the session check, saving unverified")
+            return f"user id {cookies.get('ds_user_id', '?')}", False
+        logger.warning("instagram rejected the pasted session: %s", exc)
+        raise InvalidSessionError(
+            "Instagram menolak cookie ini. Login ulang lalu ambil lagi"
+        ) from exc
+    user = (data.get("data") or {}).get("user")
+    if not user or not user.get("username"):
+        raise InvalidSessionError("Cookie ini sudah logout atau kedaluwarsa. Ambil cookie baru")
+    return str(user["username"]), True

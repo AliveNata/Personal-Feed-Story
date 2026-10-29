@@ -4,9 +4,11 @@ from dataclasses import dataclass
 
 import httpx
 from redis import Redis
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.library.storage import LibraryStorage
+from app.platform_sessions import SecretBox, SessionStore, SessionSync
 from app.ratelimit import RateBudget
 from app.sources.instagram import CursorStore, InstagramSource, MediaCache, build_loader
 from app.sources.tiktok import TikTokSource
@@ -17,9 +19,16 @@ class Sources:
     tiktok: TikTokSource
     instagram: InstagramSource
     budget: RateBudget
+    sessions: SessionStore | None = None
+    syncs: dict[str, SessionSync] | None = None
 
 
-def build_sources(settings: Settings, http_client: httpx.AsyncClient, redis: Redis) -> Sources:
+def build_sources(
+    settings: Settings,
+    http_client: httpx.AsyncClient,
+    redis: Redis,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> Sources:
     budget = RateBudget(
         redis,
         {
@@ -42,7 +51,17 @@ def build_sources(settings: Settings, http_client: httpx.AsyncClient, redis: Red
         cursors=CursorStore(redis),
         media_cache=MediaCache(redis),
     )
-    return Sources(tiktok=tiktok, instagram=instagram, budget=budget)
+    if session_factory is None:
+        return Sources(tiktok=tiktok, instagram=instagram, budget=budget)
+    # Cookies pasted on the Session page win over .env, in this process and in the worker.
+    store = SessionStore(session_factory, SecretBox(settings.secrets_dir))
+    syncs = {
+        "tiktok": SessionSync(store, "tiktok", tiktok.use_session),
+        "instagram": SessionSync(store, "instagram", instagram.use_session),
+    }
+    tiktok.set_session_sync(syncs["tiktok"])
+    instagram.set_session_sync(syncs["instagram"])
+    return Sources(tiktok=tiktok, instagram=instagram, budget=budget, sessions=store, syncs=syncs)
 
 
 def build_storage(settings: Settings) -> LibraryStorage:

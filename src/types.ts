@@ -164,3 +164,12 @@ export interface ActivityResponse {
   events: LibraryEvent[];
   nextBefore: number | null;
 }
+
+export interface PlatformSessionStatus {
+  platform: Platform;
+  source: 'web' | 'env' | 'none';
+  accountName: string | null;
+  verified: boolean;
+  updatedAt: string | null;
+  waitSeconds: number;
+}

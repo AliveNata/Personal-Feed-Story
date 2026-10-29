@@ -176,6 +176,20 @@ class LibraryEvent(Base):
     detail: Mapped[str] = mapped_column(Text, default="")
 
 
+class PlatformSession(Base):
+    """Cookie for a platform pasted on the Session page. Overrides the .env and session file."""
+
+    __tablename__ = "platform_sessions"
+
+    platform: Mapped[str] = mapped_column(String(20), primary_key=True)
+    # Fernet token of the raw Cookie header. The key lives on disk, not in the database.
+    secret: Mapped[str] = mapped_column(Text)
+    account_name: Mapped[str] = mapped_column(String(100))
+    # False when the platform could not be asked (rate limited) at save time.
+    verified: Mapped[bool] = mapped_column(Boolean)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class CachedPage(Base):
     """Scraped data kept for a month, so viewing an account again costs no platform requests."""
 

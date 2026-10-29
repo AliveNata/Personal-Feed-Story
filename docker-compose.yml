@@ -49,6 +49,8 @@ services:
     volumes: &backend-volumes
       - ./backend/secrets:/app/secrets:ro
       - ./data/library:/data/library
+      # Key for cookies saved on the Session page. Keep it out of backups shared with others.
+      - ./data/secrets:/data/secrets
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:

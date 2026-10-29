@@ -28,7 +28,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     engine = build_engine(settings.database_url)
     http_client = httpx.AsyncClient(timeout=settings.http_timeout_seconds)
     redis = Redis.from_url(settings.redis_url)
-    sources = build_sources(settings, http_client, redis)
+    sources = build_sources(settings, http_client, redis, build_session_factory(engine))
     resolvers: dict[str, MediaResolver] = {
         "tiktok": sources.tiktok,
         "instagram": sources.instagram,

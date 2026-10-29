@@ -15,7 +15,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY app ./app
-RUN useradd --create-home --uid 10001 app && mkdir -p /data/library && chown app /data/library
+RUN useradd --create-home --uid 10001 app && mkdir -p /data/library /data/secrets && chown app /data/library /data/secrets
 USER app
 
 EXPOSE 8000

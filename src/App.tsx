@@ -11,6 +11,7 @@ import Header from './components/Header';
 import LibraryPage from './components/LibraryPage';
 import Login from './components/Login';
 import RequireAuth from './components/RequireAuth';
+import SessionPage from './components/SessionPage';
 import { Platform, Post, RateInfo, StoriesStatus } from './types';
 import { ApiError, fetchFeed } from './utils/api';
 
@@ -140,6 +141,14 @@ function App() {
             <main className="container mx-auto px-4 py-8">
               <Routes>
                 <Route path="/login" element={<Login />} />
+                <Route
+                  path="/session"
+                  element={
+                    <RequireAuth>
+                      <SessionPage />
+                    </RequireAuth>
+                  }
+                />
                 <Route
                   path="/library"
                   element={

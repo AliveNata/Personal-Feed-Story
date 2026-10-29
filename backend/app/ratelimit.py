@@ -136,6 +136,14 @@ class RateBudget:
         self.cooldown(platform, seconds)
         return seconds
 
+    def clear_throttle(self, platform: str) -> None:
+        """Forget cooldown and strikes, for a fresh session the platform has not limited yet."""
+        _, cooldown_key = self._keys(platform)
+        try:
+            self._redis.delete(cooldown_key, f"ratebudget:{platform}:strikes")
+        except RedisError as exc:
+            logger.warning("rate budget clear failed for %s: %s", platform, exc)
+
     def cooldown(self, platform: str, seconds: int) -> None:
         _, cooldown_key = self._keys(platform)
         try:

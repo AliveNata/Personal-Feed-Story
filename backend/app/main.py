@@ -19,7 +19,7 @@ from redis import Redis as SyncRedis
 from redis.asyncio import Redis
 from starlette.background import BackgroundTask
 
-from app import auth, freshness
+from app import auth, freshness, session_routes
 from app.cache import PageCache, PgPageCache, page_key
 from app.config import get_settings
 from app.db import build_engine, build_session_factory
@@ -64,13 +64,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     sync_redis = SyncRedis.from_url(settings.redis_url)
     engine = build_engine(settings.database_url)
     queue = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-    sources = build_sources(settings, http_client, sync_redis)
+    session_factory = build_session_factory(engine)
+    sources = build_sources(settings, http_client, sync_redis, session_factory)
     media_session: AsyncSession[CdnResponse] = AsyncSession(impersonate="chrome")
 
     app.state.http_client = http_client
     app.state.media_session = media_session
     app.state.redis = redis
-    app.state.session_factory = build_session_factory(engine)
+    app.state.session_factory = session_factory
+    app.state.platform_sessions = sources
     app.state.queue = queue
     app.state.storage = build_storage(settings)
     app.state.cache = PgPageCache(app.state.session_factory)
@@ -92,13 +94,14 @@ app = FastAPI(title="Personal Feed Story API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type"],
     allow_credentials=True,
 )
 app.include_router(auth.router)
 app.include_router(library_routes.router)
 app.include_router(favorites_routes.router)
+app.include_router(session_routes.router)
 
 
 @app.exception_handler(SourceError)
@@ -325,7 +328,8 @@ async def proxy_media(
     host = urlparse(url).hostname or ""
     if host.endswith(".tiktok.com"):
         # TikTok's video hosts need the session cookies, the image CDNs do not.
-        cookie = get_settings().tiktok_cookie.get_secret_value()
+        # The current one: a cookie pasted on the Session page replaces the .env value.
+        cookie = request.app.state.sources["tiktok"].cookie
         if cookie:
             headers["Cookie"] = cookie
 

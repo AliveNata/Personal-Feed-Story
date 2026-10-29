@@ -94,6 +94,9 @@ Change it later with `python -m app.cli set-password aliv`, which also logs out 
 
 ### 5. Instagram session (needed for stories)
 
+Easiest: open the **Session** page in the web app (after login), paste the `cookie` request header from a logged in instagram.com tab and click "Simpan dan cek". The page has a step by step guide for Instagram and TikTok. A cookie saved there is encrypted with a key in `./data/secrets` (created on first use), replaces the `.env` / session file value, and reaches the backend and the worker within 10 seconds, no restart. A cookie Instagram accepts also clears the app's own cooldown. The CLI below still works.
+
+
 Use a secondary Instagram account. Logging in from the container usually triggers an Instagram checkpoint, so reuse the session of a browser that is already logged in instead. Copy the `cookie` request header from instagram.com (DevTools > Network > the `www.instagram.com` document request > Request Headers), then run this and paste it (input is hidden):
 
 ```bash

@@ -28,6 +28,8 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://feed:feed@postgres:5432/feed"
     library_dir: Path = Path("/data/library")
+    # Writable, holds the key that encrypts platform cookies saved from the web.
+    secrets_dir: Path = Path("/data/secrets")
     # Random pause between posts in a download job, to stay under platform rate limits.
     instagram_delay_seconds: tuple[float, float] = (4.0, 9.0)
     tiktok_delay_seconds: tuple[float, float] = (1.0, 3.0)

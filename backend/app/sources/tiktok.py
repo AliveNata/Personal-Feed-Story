@@ -11,6 +11,7 @@ import httpx
 from app.errors import PrivateAccountError, UpstreamError, UserNotFoundError
 from app.library.types import ResolvedPost
 from app.models import FeedPage, MediaSlide, Post, proxied_media_url
+from app.platform_sessions import SessionSync, StoredSession
 from app.ratelimit import RateBudget
 from app.sources import ProfileProbe
 
@@ -116,11 +117,38 @@ class TikTokSource:
         self._budget = budget
         self._douk_base_url = douk_base_url.rstrip("/")
         self._cookie = cookie
+        self._default_cookie = cookie
+        self._session_sync: SessionSync | None = None
         self._lookback_days = lookback_days
         # secUid never changes for an account, so one lookup per username is enough.
         self._sec_uid_cache: dict[str, str] = {}
 
-    async def _post_douk(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    @property
+    def cookie(self) -> str:
+        return self._cookie
+
+    def set_session_sync(self, sync: SessionSync) -> None:
+        self._session_sync = sync
+
+    def use_session(self, stored: StoredSession | None) -> None:
+        self._cookie = stored.cookie if stored else self._default_cookie
+
+    async def check_cookie(self, cookie: str) -> bool:
+        """Whether DouK can look up a well known account with this cookie. One request."""
+        body = await self._post_douk(
+            "/tiktok/user", {"unique_id": "tiktok", "cookie": cookie}, keep_cookie=True
+        )
+        data = body.get("data")
+        return isinstance(data, dict) and isinstance(data.get("user"), dict)
+
+    async def _post_douk(
+        self, path: str, payload: dict[str, Any], *, keep_cookie: bool = False
+    ) -> dict[str, Any]:
+        if self._session_sync is not None:
+            await self._session_sync.ensure_current()
+            if "cookie" in payload and not keep_cookie:
+                # The payload was built before a newer web session was picked up.
+                payload = {**payload, "cookie": self._cookie}
         if self._budget is not None:
             await asyncio.to_thread(self._budget.ensure_available, PLATFORM)
             self._budget.record(PLATFORM)
