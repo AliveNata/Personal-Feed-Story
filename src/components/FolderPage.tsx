@@ -152,6 +152,12 @@ const FolderPage: React.FC = () => {
         </div>
         {folder && (
           <div className="flex flex-wrap items-center gap-2">
+            <Link
+              to={`/library/activity?folder=${folder.id}`}
+              className={`inline-flex items-center ${secondaryButton}`}
+            >
+              Riwayat
+            </Link>
             <button type="button" className={secondaryButton} onClick={() => setIsUploadOpen(true)}>
               Tambah file
             </button>

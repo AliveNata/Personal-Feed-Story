@@ -41,7 +41,12 @@ const LibraryPage: React.FC = () => {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">Library</h1>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold">Library</h1>
+        <Link to="/library/activity" className={`inline-flex items-center ${secondaryButton}`}>
+          Riwayat
+        </Link>
+      </div>
 
       {state.status === 'loading' && (
         <Panel role="status">

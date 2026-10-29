@@ -5,6 +5,7 @@ import FavoritesBar from './favorites/FavoritesBar';
 import { FavoritesProvider } from './favorites/FavoritesContext';
 import Feed, { FeedStatus } from './components/Feed';
 import FeedControls from './components/FeedControls';
+import ActivityPage from './components/ActivityPage';
 import FolderPage from './components/FolderPage';
 import Header from './components/Header';
 import LibraryPage from './components/LibraryPage';
@@ -52,43 +53,40 @@ function App() {
   const [feed, setFeed] = useState<FeedState>(IDLE_FEED);
   const activeRequest = useRef<AbortController | null>(null);
 
-  const loadFeed = useCallback(
-    async (targetPlatform: Platform, targetUsername: string, refresh = false) => {
-      if (!targetUsername) {
-        setFeed(IDLE_FEED);
+  const loadFeed = useCallback(async (targetPlatform: Platform, targetUsername: string, refresh = false) => {
+    if (!targetUsername) {
+      setFeed(IDLE_FEED);
+      return;
+    }
+    // A newer search wins, so drop whatever is still in flight.
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    activeRequest.current = controller;
+
+    setFeed((previous) => ({ ...previous, status: 'loading', errorMessage: null }));
+    try {
+      const data = await fetchFeed(targetPlatform, targetUsername, {
+        refresh,
+        signal: controller.signal,
+      });
+      setFeed({
+        ...IDLE_FEED,
+        status: 'success',
+        posts: data.posts,
+        cached: data.cached,
+        fetchedAt: data.fetchedAt,
+        nextCursor: data.nextCursor,
+        storiesStatus: data.storiesStatus,
+        rate: data.rate,
+      });
+    } catch (error) {
+      if (controller.signal.aborted) {
         return;
       }
-      // A newer search wins, so drop whatever is still in flight.
-      activeRequest.current?.abort();
-      const controller = new AbortController();
-      activeRequest.current = controller;
-
-      setFeed((previous) => ({ ...previous, status: 'loading', errorMessage: null }));
-      try {
-        const data = await fetchFeed(targetPlatform, targetUsername, {
-          refresh,
-          signal: controller.signal,
-        });
-        setFeed({
-          ...IDLE_FEED,
-          status: 'success',
-          posts: data.posts,
-          cached: data.cached,
-          fetchedAt: data.fetchedAt,
-          nextCursor: data.nextCursor,
-          storiesStatus: data.storiesStatus,
-          rate: data.rate,
-        });
-      } catch (error) {
-        if (controller.signal.aborted) {
-          return;
-        }
-        console.error('fetchFeed failed', error);
-        setFeed({ ...IDLE_FEED, status: 'error', errorMessage: describeError(error) });
-      }
-    },
-    [],
-  );
+      console.error('fetchFeed failed', error);
+      setFeed({ ...IDLE_FEED, status: 'error', errorMessage: describeError(error) });
+    }
+  }, []);
 
   const loadMore = useCallback(async () => {
     const cursor = feed.nextCursor;
@@ -147,6 +145,14 @@ function App() {
                   element={
                     <RequireAuth>
                       <LibraryPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="/library/activity"
+                  element={
+                    <RequireAuth>
+                      <ActivityPage />
                     </RequireAuth>
                   }
                 />

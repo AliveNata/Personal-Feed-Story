@@ -153,6 +153,29 @@ class Favorite(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class LibraryEvent(Base):
+    """One change in the Library, newest first on the history page.
+
+    Folder ids are kept without a foreign key and names are copied, so the history still reads
+    after a folder is renamed or deleted.
+    """
+
+    __tablename__ = "library_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, index=True
+    )
+    # download, upload, move, delete_item, delete_folder
+    action: Mapped[str] = mapped_column(String(20))
+    item_count: Mapped[int] = mapped_column(Integer)
+    folder_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    folder_name: Mapped[str] = mapped_column(String(100))
+    target_folder_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    target_folder_name: Mapped[str | None] = mapped_column(String(100))
+    detail: Mapped[str] = mapped_column(Text, default="")
+
+
 class CachedPage(Base):
     """Scraped data kept for a month, so viewing an account again costs no platform requests."""
 

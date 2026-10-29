@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import Blob, DownloadJob, Folder, MediaItem
+from app.library import events
 from app.library.storage import DownloadedFile, LibraryStorage
 
 logger = logging.getLogger(__name__)
@@ -243,6 +244,10 @@ async def delete_folder(db: AsyncSession, storage: LibraryStorage, folder: Folde
             await db.scalars(select(MediaItem.blob_sha256).where(MediaItem.folder_id == folder.id))
         ).all()
     )
+    count = await db.scalar(
+        select(func.count()).select_from(MediaItem).where(MediaItem.folder_id == folder.id)
+    )
+    events.record(db, "delete_folder", folder, int(count or 0))
     await db.execute(delete(MediaItem).where(MediaItem.folder_id == folder.id))
     await db.delete(folder)
     await db.commit()
@@ -261,9 +266,12 @@ async def move_items(db: AsyncSession, item_ids: list[int], target: Folder) -> M
     """Move items to another folder. Files stay where they are, only the folder link changes."""
     items = list((await db.scalars(select(MediaItem).where(MediaItem.id.in_(item_ids)))).all())
     moved = merged = 0
+    # source folder id -> (moved, merged), for the history entries
+    per_source: dict[int, list[int]] = {}
     for item in items:
         if item.folder_id == target.id:
             continue
+        counts = per_source.setdefault(item.folder_id, [0, 0])
         duplicate = await db.scalar(
             select(MediaItem.id).where(
                 MediaItem.folder_id == target.id,
@@ -276,15 +284,34 @@ async def move_items(db: AsyncSession, item_ids: list[int], target: Folder) -> M
             # The target row points at the same blob, so no file becomes orphaned.
             await db.delete(item)
             merged += 1
+            counts[1] += 1
         else:
             item.folder_id = target.id
             moved += 1
+            counts[0] += 1
+    for source_id, (source_moved, source_merged) in per_source.items():
+        source = await db.get(Folder, source_id)
+        if source is not None:
+            detail = f"{source_merged} sudah ada di tujuan, tidak dobel" if source_merged else ""
+            events.record(
+                db, "move", source, source_moved + source_merged, target=target, detail=detail
+            )
     await db.commit()
     return MoveResult(moved=moved, merged=merged)
 
 
+def describe_item(item: MediaItem) -> str:
+    if item.platform == "upload":
+        return item.caption or "file upload"
+    kind = "story" if item.is_story else "post"
+    return f"{item.platform} @{item.author_username}, {kind} {item.source_post_id}"
+
+
 async def delete_item(db: AsyncSession, storage: LibraryStorage, item: MediaItem) -> None:
     sha = item.blob_sha256
+    folder = await db.get(Folder, item.folder_id)
+    if folder is not None:
+        events.record(db, "delete_item", folder, 1, detail=describe_item(item))
     await db.delete(item)
     await db.commit()
     await delete_orphan_blobs(db, storage, {sha})

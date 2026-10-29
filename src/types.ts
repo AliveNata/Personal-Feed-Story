@@ -143,3 +143,24 @@ export interface FavoritesResponse {
   favorites: Favorite[];
   checking: boolean;
 }
+
+export type LibraryAction = 'download' | 'upload' | 'move' | 'delete_item' | 'delete_folder';
+
+export interface LibraryEvent {
+  id: number;
+  createdAt: string;
+  action: LibraryAction;
+  itemCount: number;
+  folderId: number | null;
+  folderName: string;
+  targetFolderId: number | null;
+  targetFolderName: string | null;
+  detail: string;
+  folderExists: boolean;
+  targetFolderExists: boolean;
+}
+
+export interface ActivityResponse {
+  events: LibraryEvent[];
+  nextBefore: number | null;
+}

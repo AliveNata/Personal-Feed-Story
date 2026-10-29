@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from arq.connections import ArqRedis
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import Field, field_validator
 from redis.asyncio import Redis
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_db, get_redis, require_user
 from app.config import get_settings
 from app.db import DownloadJob, Folder, MediaItem, User
-from app.library import service
+from app.library import events, service
 from app.library.progress import read_progress
 from app.library.storage import DownloadError, LibraryStorage, content_type_for_upload
 from app.models import CamelModel, Platform
@@ -296,7 +296,8 @@ async def upload_file(
     storage: Storage,
     user: Annotated[User, Depends(require_user)],
 ) -> UploadResponse:
-    if await db.get(Folder, folder_id) is None:
+    folder = await db.get(Folder, folder_id)
+    if folder is None:
         raise HTTPException(status_code=404, detail="Folder tidak ditemukan")
     filename = file.filename or "file"
     content_type = content_type_for_upload(filename, file.content_type)
@@ -327,6 +328,8 @@ async def upload_file(
     )
     if item is None:
         return UploadResponse(status="skipped", item=None)
+    await events.record_upload(db, folder, filename)
+    await db.commit()
     return UploadResponse(status="saved", item=_item_response(item))
 
 
@@ -357,3 +360,58 @@ async def lookup_downloaded(
     for post_id, folder_name in rows.all():
         folders_by_post.setdefault(post_id, []).append(folder_name)
     return DownloadedLookupResponse(folders_by_post=folders_by_post)
+
+
+class LibraryEventResponse(CamelModel):
+    id: int
+    created_at: datetime
+    action: Literal["download", "upload", "move", "delete_item", "delete_folder"]
+    item_count: int
+    folder_id: int | None
+    folder_name: str
+    target_folder_id: int | None
+    target_folder_name: str | None
+    detail: str
+    # Folders can be deleted later: only link to the ones still there.
+    folder_exists: bool
+    target_folder_exists: bool
+
+
+class ActivityResponse(CamelModel):
+    events: list[LibraryEventResponse]
+    # Pass as "before" for the next older page, None when there is no more.
+    next_before: int | None
+
+
+@router.get("/activity", response_model=ActivityResponse)
+async def list_activity(
+    db: DbSession,
+    folder_id: Annotated[int | None, Query(alias="folderId")] = None,
+    before: int | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> ActivityResponse:
+    rows = await events.list_events(db, folder_id=folder_id, before_id=before, limit=limit + 1)
+    page = rows[:limit]
+    ids = {row.folder_id for row in page} | {row.target_folder_id for row in page}
+    existing = set(
+        (await db.scalars(select(Folder.id).where(Folder.id.in_([i for i in ids if i])))).all()
+    )
+    return ActivityResponse(
+        events=[
+            LibraryEventResponse(
+                id=row.id,
+                created_at=row.created_at,
+                action=row.action,
+                item_count=row.item_count,
+                folder_id=row.folder_id,
+                folder_name=row.folder_name,
+                target_folder_id=row.target_folder_id,
+                target_folder_name=row.target_folder_name,
+                detail=row.detail,
+                folder_exists=row.folder_id in existing,
+                target_folder_exists=row.target_folder_id in existing,
+            )
+            for row in page
+        ],
+        next_before=page[-1].id if len(rows) > limit else None,
+    )

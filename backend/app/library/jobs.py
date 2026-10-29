@@ -9,9 +9,9 @@ from functools import partial
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db import DownloadJob, MediaItem
+from app.db import DownloadJob, Folder, MediaItem
 from app.errors import RateLimitedError, SourceError
-from app.library import service
+from app.library import events, service
 from app.library.progress import NullProgress, ProgressReporter
 from app.library.storage import DownloadError, LibraryStorage
 from app.library.types import MediaResolver, ResolvedPost
@@ -183,6 +183,14 @@ class JobRunner:
             if job is None:
                 return
             job.status = status
+            folder = await db.get(Folder, job.folder_id)
+            if folder is not None and (job.saved_items or job.failed_posts):
+                parts = [f"{job.platform} @{job.username}, {job.done_posts}/{job.total_posts} post"]
+                if job.skipped_items:
+                    parts.append(f"{job.skipped_items} dilewati")
+                if job.failed_posts:
+                    parts.append(f"{job.failed_posts} gagal")
+                events.record(db, "download", folder, job.saved_items, detail=", ".join(parts))
             await db.commit()
             logger.info(
                 "job %s %s: %d/%d posts, %d saved, %d skipped, %d failed",

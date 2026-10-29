@@ -11,7 +11,14 @@ from app.db import User
 from app.library.jobs import JobRunner
 from app.main import app
 from tests.conftest import requires_db
-from tests.test_library import PHOTO_URL_BLUE, PHOTO_URL_RED, FakeCdnStorage, FakeResolver, no_sleep
+from tests.test_library import (
+    PHOTO_URL_BLUE,
+    PHOTO_URL_RED,
+    FakeCdnStorage,
+    FakeResolver,
+    no_sleep,
+    write_jpeg,
+)
 
 pytestmark = requires_db
 
@@ -339,3 +346,62 @@ async def test_move_items_merges_duplicates_and_creates_target_folder(
     assert bali_after == []
     assert (created["folderName"], created["moved"]) == ("Folder Baru", 1)
     assert unauthorized.status_code == 401
+
+
+async def test_activity_records_download_move_upload_and_deletes(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    # Arrange
+    await login(client)
+    runner = JobRunner(
+        session_factory,
+        {"instagram": FakeResolver({"p1": [PHOTO_URL_BLUE], "p2": [PHOTO_URL_RED]})},
+        app.state.storage,
+        {},
+        10_000_000,
+        no_sleep,
+    )
+    job = (
+        await client.post(
+            "/api/downloads",
+            json={
+                "folderName": "Bali",
+                "platform": "instagram",
+                "username": "someone",
+                "postIds": ["p1", "p2"],
+            },
+        )
+    ).json()
+    await runner.run(job["id"])
+    bali = (await client.get("/api/folders")).json()[0]["id"]
+    photos = (await client.get(f"/api/folders/{bali}/items?type=photo")).json()
+
+    # Act
+    await client.post("/api/items/move", json={"itemIds": [photos[0]["id"]], "folderName": "Salah"})
+    jpeg = app.state.storage.root / "up.jpg"
+    write_jpeg(jpeg, "red")
+    for name in ("a.jpg", "b.jpg"):
+        await client.post(
+            f"/api/folders/{bali}/files", files={"file": (name, jpeg.read_bytes(), "image/jpeg")}
+        )
+    await client.delete(f"/api/items/{photos[1]['id']}")
+    await client.delete(f"/api/folders/{bali}")
+    everything = (await client.get("/api/activity")).json()
+    page = (await client.get("/api/activity", params={"limit": 2})).json()
+    salah = next(f for f in (await client.get("/api/folders")).json() if f["name"] == "Salah")
+    for_salah = (await client.get("/api/activity", params={"folderId": salah["id"]})).json()
+
+    # Assert
+    actions = [(e["action"], e["itemCount"]) for e in everything["events"]]
+    assert actions == [
+        ("delete_folder", 1),
+        ("delete_item", 1),
+        ("upload", 1),
+        ("move", 1),
+        ("download", 2),
+    ]
+    move = everything["events"][3]
+    assert (move["folderName"], move["targetFolderName"]) == ("Bali", "Salah")
+    assert (move["folderExists"], move["targetFolderExists"]) == (False, True)
+    assert len(page["events"]) == 2 and page["nextBefore"] is not None
+    assert [e["action"] for e in for_salah["events"]] == ["move"]

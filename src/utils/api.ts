@@ -1,4 +1,5 @@
 import {
+  ActivityResponse,
   DownloadJob,
   Favorite,
   FavoritesResponse,
@@ -265,4 +266,14 @@ export const fetchFreshMedia = (
 ): Promise<FreshMediaResponse> => {
   const params = new URLSearchParams({ platform, username, postId, expiredUrl });
   return request<FreshMediaResponse>(`/api/media/fresh?${params.toString()}`);
+};
+
+export const fetchActivity = (
+  options: { folderId?: number | null; before?: number | null } = {},
+): Promise<ActivityResponse> => {
+  const params = new URLSearchParams();
+  if (options.folderId) params.set('folderId', String(options.folderId));
+  if (options.before) params.set('before', String(options.before));
+  const query = params.toString();
+  return request<ActivityResponse>(`/api/activity${query ? `?${query}` : ''}`);
 };
