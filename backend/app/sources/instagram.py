@@ -41,7 +41,8 @@ logger = logging.getLogger(__name__)
 
 PLATFORM = "instagram"
 STORY_ID_PREFIX = "story-"
-CURSOR_TTL_SECONDS = 30 * 60
+# Cached pages keep their cursor for load more, instaloader itself refuses one older than a day.
+CURSOR_TTL_SECONDS = 24 * 60 * 60
 # Instaloader's own estimate of how long it would sleep before the next query. Anything longer
 # than this means "close to the limit": stop and tell the user instead of hanging the request.
 MAX_ACCEPTABLE_WAIT_SECONDS = 10
@@ -494,7 +495,20 @@ class InstagramSource:
             stories, status = self._fetch_stories(profile.userid)
         # Pinned posts come first from instaloader, so re-sort the page by date.
         posts.sort(key=lambda post: post.created_at, reverse=True)
-        return FeedPage(posts=stories + posts, next_cursor=next_cursor, stories_status=status)
+        snapshot = None
+        if not cursor:
+            # Same numbers a probe would fetch, already in hand: no extra query for the baseline.
+            snapshot = ProfileProbe(
+                avatar_url=profile.profile_pic_url_no_iphone or "",
+                post_count=profile.mediacount,
+                latest_story_at=max((story.created_at for story in stories), default=None),
+            )
+        return FeedPage(
+            posts=stories + posts,
+            next_cursor=next_cursor,
+            stories_status=status,
+            snapshot=snapshot,
+        )
 
     def _fetch_stories(self, user_id: int) -> tuple[list[Post], StoriesStatus]:
         if not self._include_stories or not self._loader.context.is_logged_in:

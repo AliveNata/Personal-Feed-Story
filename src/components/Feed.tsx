@@ -33,6 +33,7 @@ interface FeedProps {
   username: string;
   errorMessage: string | null;
   cached: boolean;
+  fetchedAt: string | null;
   storiesStatus: StoriesStatus;
   rate: RateInfo | null;
   hasMore: boolean;
@@ -58,6 +59,7 @@ const Feed: React.FC<FeedProps> = ({
   username,
   errorMessage,
   cached,
+  fetchedAt,
   storiesStatus,
   rate,
   hasMore,
@@ -200,7 +202,9 @@ const Feed: React.FC<FeedProps> = ({
         <p className="text-sm text-gray-700">
           {platformLabel} @{username}, {regularPosts.length} post
           {stories.length ? `, ${stories.length} story` : ''}
-          {cached ? ' (dari cache)' : ''}
+          {cached
+            ? ` (dari cache${fetchedAt ? `, diambil ${formatRelativeTime(fetchedAt)}` : ''})`
+            : ''}
         </p>
         {user && <FavoriteToggle platform={platform} username={username} />}
         {!user && (
@@ -316,6 +320,8 @@ const Feed: React.FC<FeedProps> = ({
               <div className="relative">
                 <PostCarousel
                   post={post}
+                  platform={platform}
+                  username={username}
                   isSaved={savedFolders !== undefined || itemStates[post.id] === 'done'}
                 />
                 <DownloadOverlay

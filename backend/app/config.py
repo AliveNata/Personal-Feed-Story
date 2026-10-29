@@ -18,7 +18,6 @@ class Settings(BaseSettings):
     ig_include_stories: bool = True
 
     redis_url: str = "redis://redis:6379/0"
-    cache_ttl_seconds: int = Field(default=900, gt=0)
     default_post_limit: int = Field(default=12, gt=0, le=50)
     http_timeout_seconds: float = 30.0
 

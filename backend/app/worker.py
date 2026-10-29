@@ -1,5 +1,6 @@
 """arq worker for download jobs. Run with: arq app.worker.WorkerSettings"""
 
+import asyncio
 import logging
 from typing import Any, ClassVar
 
@@ -8,6 +9,7 @@ from arq import cron, func
 from arq.connections import RedisSettings
 from redis import Redis
 
+from app.cache import purge_expired
 from app.config import get_settings
 from app.db import build_engine, build_session_factory
 from app.factory import build_sources, build_storage
@@ -15,6 +17,7 @@ from app.favorites import service as favorites
 from app.library.jobs import JobRunner
 from app.library.progress import RedisProgress
 from app.library.types import MediaResolver
+from app.mediacache import MediaFileCache
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -33,6 +36,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["redis"] = redis
     ctx["sources"] = sources
     ctx["session_factory"] = build_session_factory(engine)
+    ctx["media_cache"] = MediaFileCache(settings.library_dir / "mediacache")
     ctx["delays"] = {
         "instagram": settings.instagram_delay_seconds,
         "tiktok": settings.tiktok_delay_seconds,
@@ -78,6 +82,12 @@ async def check_favorites(ctx: dict[str, Any]) -> None:
         redis.delete(favorites.CHECKING_KEY)
 
 
+async def purge_caches(ctx: dict[str, Any]) -> None:
+    pages = await purge_expired(ctx["session_factory"])
+    files = await asyncio.to_thread(ctx["media_cache"].purge)
+    logger.info("cache purge: %d expired pages, %d old media files", pages, files)
+
+
 class WorkerSettings:
     functions: ClassVar = [
         download_job,
@@ -87,6 +97,8 @@ class WorkerSettings:
     cron_jobs: ClassVar = [
         # Every 2 hours: frequent enough for a hint, light on the request budget.
         cron(check_favorites, hour=set(range(0, 24, 2)), minute=17, keep_result=0),
+        # Once a day at night is plenty for month long caches.
+        cron(purge_caches, hour=3, minute=41, keep_result=0),
     ]
     on_startup = startup
     on_shutdown = shutdown

@@ -1,12 +1,24 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Play } from 'lucide-react';
-import { MediaSlide, Post } from '../types';
+import { MediaSlide, Platform, Post } from '../types';
+import { fetchFreshMedia } from '../utils/api';
 import { focusRing } from './ui';
 
 interface PostCarouselProps {
   post: Post;
+  platform: Platform;
+  username: string;
   isSaved: boolean;
 }
+
+/** Raw CDN URL back out of our /api/media?url= proxy link. */
+const rawUrl = (proxied: string): string => {
+  try {
+    return new URL(proxied, window.location.origin).searchParams.get('url') ?? proxied;
+  } catch {
+    return proxied;
+  }
+};
 
 const AUTOPLAY_MS = 4000;
 
@@ -18,9 +30,38 @@ const SlideView: React.FC<{
   alt: string;
   isActive: boolean;
   onPlayingChange: (playing: boolean) => void;
-}> = ({ slide, alt, isActive, onPlayingChange }) => {
+  // Fresh link for this slide when the cached one expired, null if none could be had.
+  onExpired: () => Promise<string | null>;
+}> = ({ slide, alt, isActive, onPlayingChange, onExpired }) => {
   const [failed, setFailed] = useState(false);
+  const [videoUrl, setVideoUrl] = useState(slide.url);
+  const [isRenewing, setIsRenewing] = useState(false);
+  const hasRenewed = useRef(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Cached pages live for a month, video links for hours to days. Ask once for a new link,
+  // only when this video is actually played, since that costs a platform request.
+  const handleVideoError = () => {
+    if (hasRenewed.current) {
+      setFailed(true);
+      return;
+    }
+    hasRenewed.current = true;
+    setIsRenewing(true);
+    onExpired()
+      .then((fresh) => {
+        if (fresh) {
+          setVideoUrl(fresh);
+        } else {
+          setFailed(true);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('fetchFreshMedia failed', error);
+        setFailed(true);
+      })
+      .finally(() => setIsRenewing(false));
+  };
 
   // Leaving a slide should stop its video, otherwise audio keeps playing off screen.
   useEffect(() => {
@@ -34,11 +75,18 @@ const SlideView: React.FC<{
       </div>
     );
   }
+  if (isRenewing) {
+    return (
+      <div role="status" className="flex h-full w-full items-center justify-center bg-black px-4 text-center text-sm text-white">
+        Link video kedaluwarsa, mengambil link baru...
+      </div>
+    );
+  }
   if (slide.type === 'video') {
     return (
       <video
         ref={videoRef}
-        src={isActive ? slide.url : undefined}
+        src={isActive ? videoUrl : undefined}
         poster={slide.posterUrl ?? undefined}
         controls
         playsInline
@@ -46,7 +94,7 @@ const SlideView: React.FC<{
         onPlay={() => onPlayingChange(true)}
         onPause={() => onPlayingChange(false)}
         onEnded={() => onPlayingChange(false)}
-        onError={() => setFailed(true)}
+        onError={handleVideoError}
         className="h-full w-full bg-black object-contain"
       />
     );
@@ -63,7 +111,7 @@ const SlideView: React.FC<{
 };
 
 /** Post media with arrows, dots and autoplay that pauses on hover, focus, video play and off screen. */
-const PostCarousel: React.FC<PostCarouselProps> = ({ post, isSaved }) => {
+const PostCarousel: React.FC<PostCarouselProps> = ({ post, platform, username, isSaved }) => {
   const slides: MediaSlide[] = post.media.length
     ? post.media
     : [{ type: 'photo', url: post.imageUrl, posterUrl: null }];
@@ -134,6 +182,10 @@ const PostCarousel: React.FC<PostCarouselProps> = ({ post, isSaved }) => {
               alt={post.caption || 'Post tanpa caption'}
               isActive={slideIndex === index}
               onPlayingChange={setIsVideoPlaying}
+              onExpired={async () => {
+                const fresh = await fetchFreshMedia(platform, username, post.id, rawUrl(slide.url));
+                return fresh.urls[slideIndex] ?? null;
+              }}
             />
             {slide.type === 'video' && slideIndex !== index && (
               <Play className="absolute bottom-3 right-3 h-6 w-6 text-white drop-shadow" aria-hidden="true" />

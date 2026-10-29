@@ -1,6 +1,6 @@
 # Personal Feed Story
 
-Feed viewer for TikTok and Instagram accounts, with a private download library. React frontend (Vite) plus a FastAPI backend that scrapes on demand and caches the result in Redis.
+Feed viewer for TikTok and Instagram accounts, with a private download library. React frontend (Vite) plus a FastAPI backend that scrapes on demand and keeps the result for a month, scraping again only when the account changed.
 
 - Anyone can view a feed.
 - After login (one account, created from the CLI) you can tick posts and stories, download them into a named folder, and browse the folder with Photo and Video tabs. Folders and single files can be deleted.
@@ -8,9 +8,11 @@ Feed viewer for TikTok and Instagram accounts, with a private download library. 
 - "Tambah file" uploads your own photos and videos into a folder (drag and drop or file picker). The tab is picked from the file extension.
 - Feed cards are carousels (all slides of an Instagram carousel or a TikTok slideshow) with arrows, dots and autoplay that pauses on hover, focus, video playback and off screen.
 - "Muat lebih banyak" loads older posts. Instagram pages by cursor, TikTok by 30 day windows back to one year.
-- Instagram Reels load on demand, 6 per page with "Muat reels lagi" for the rest. Each page costs about 8 requests (one per reel), so pages are cached in Redis like the feed, and Reels pause once 60% of the Instagram budget is used, leaving the rest for feeds and downloads. Downloads reuse the URLs from the Reels page.
+- Instagram Reels load on demand, 6 per page with "Muat reels lagi" for the rest. Each page costs about 8 requests (one per reel), so pages are cached for a month like the feed, and Reels pause once 60% of the Instagram budget is used, leaving the rest for feeds and downloads. Downloads reuse the URLs from the Reels page.
 - Instagram highlights load on demand. Story and highlight items share ids, so a downloaded item is greyed out wherever it shows up.
 - Folders have Post, Story and Upload tabs, each split into Foto and Video.
+- Scraped pages (feed, older pages, reels, highlights) are kept in Postgres for 30 days. Opening a cached account shows the cache right away. At most once an hour per account a cheap check runs (TikTok: 1 request for the video count, Instagram: 2 for the post count and newest story). Only when that shows a change is the account scraped again, and its other cached pages are dropped. If the check or the scrape is refused (rate limit), the cache is shown. "Scrape ulang" always scrapes. Stories older than 24 hours are hidden from cached pages.
+- Photos and covers are saved to `./data/library/mediacache` the first time they are shown, so a month old page still renders after the CDN links expire. Videos stream from the CDN: when a cached video link expired, playing it asks for a new link once (one platform request). The worker deletes expired pages and media files older than 35 days every night.
 - Favorites (login required): "Favoritkan" on an open feed pins the account to a row above the search form, with its profile photo. A blue ring means a new post (TikTok and Instagram) or a new Instagram story since you last opened that feed. The worker checks every 2 hours, "Cek sekarang" checks right away.
 - A request budget per platform (`INSTAGRAM_RATE_BUDGET`, `TIKTOK_RATE_BUDGET`, default 100 and 150 requests per 15 minutes) warns in the UI when close to the limit and refuses with "tunggu sekitar N menit" when used up or after a real 429. These numbers are our own conservative guesses.
 
@@ -20,8 +22,8 @@ Feed viewer for TikTok and Instagram accounts, with a private download library. 
 browser -> vite dev server (/api proxy) -> backend (FastAPI :8000)
                                              |-> douk (DouK-Downloader Web API :5555, internal only) -> TikTok
                                              |-> instaloader (in process) -> Instagram
-                                             |-> redis (feed cache, login rate limit, job queue)
-                                             |-> postgres (users, sessions, folders, media items, jobs)
+                                             |-> redis (login rate limit, request budget, job queue)
+                                             |-> postgres (users, sessions, folders, media items, jobs, page cache)
 worker (arq) <- redis queue
   |-> douk / instaloader: resolve original media URLs per post, random delay between posts
   |-> ./data/library: files stored once per sha256, thumbnails, optional webp and h265
@@ -157,8 +159,8 @@ docker compose up -d backend worker
 | "Backend mati atau error", or Vite logs `ECONNREFUSED` on `/api` | The stack is not up. Run `docker compose up -d` and check `docker compose ps`. |
 | TikTok answers 403 | `TIKTOK_COOKIE` expired or is empty. Copy a fresh `Cookie` request header (not `Set-Cookie`) into `backend/.env`, then `docker compose up -d backend worker`. |
 | Instagram stories missing, or "login" errors | The IG session expired. Repeat step 5. |
-| Feed shows "(dari cache)" with old data | Click "Scrape ulang". |
-| Covers or photos stop loading | CDN links expired. Click "Scrape ulang". |
+| Feed shows "(dari cache)" with old data | The hourly check found no change. Click "Scrape ulang" to force a scrape. |
+| Covers or photos stop loading | They were never shown before their CDN link expired. Click "Scrape ulang". |
 | "tunggu sekitar N menit" | The request budget is used up. Wait, scraping again too soon risks the account. |
 | Blank page or `does not provide an export named` after a pull | Stop Vite, run `npm run dev -- --force`, hard refresh. |
 | UI change not visible after a pull | Same as above. Check `git log --oneline -1` matches GitHub. |
@@ -224,7 +226,7 @@ If Redis is down the API keeps working without cache and logs a warning.
 - TikTok only returns posts from the last `TIKTOK_LOOKBACK_DAYS` days (default 30). DouK pages the account until it passes that date, so a bigger window means more requests.
 - TikTok stories are not supported by DouK. Only Instagram fills the Stories row.
 - Instagram has no share count, so the share stat is hidden there.
-- CDN media links are signed and expire. If covers stop loading, use "Scrape ulang" to bypass the cache.
+- CDN media links are signed and expire. Photos are kept on disk once shown, videos get a new link when played.
 - Download jobs run one at a time. Instagram waits 4 to 9 seconds between posts by default (`INSTAGRAM_DELAY_SECONDS`), TikTok 1 to 3 (`TIKTOK_DELAY_SECONDS`). A rate limit stops the rest of the job.
 - Story download needs the Instagram session, and stories expire after 24 hours.
 - Instagram downloads reuse the media URLs cached in Redis when the feed, story or highlight was shown (12 hours), so a download sends no extra Instagram queries. Older items, or links that expired, are looked up again. An Instagram `feedback_required` answer means the account is being limited: the app stops Instagram for 30 minutes.

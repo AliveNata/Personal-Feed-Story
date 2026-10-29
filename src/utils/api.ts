@@ -3,6 +3,7 @@ import {
   Favorite,
   FavoritesResponse,
   FeedResponse,
+  FreshMediaResponse,
   Folder,
   HighlightItemsResponse,
   HighlightsResponse,
@@ -207,6 +208,8 @@ const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
 
 export const formatRelativeTime = (isoDate: string, now: Date = new Date()): string => {
   const diffSeconds = (new Date(isoDate).getTime() - now.getTime()) / 1000;
+  // Intl says "menit ini" for anything under a minute, which reads oddly in Indonesian.
+  if (Math.abs(diffSeconds) < 60) return 'baru saja';
   for (const [unit, seconds] of RELATIVE_UNITS) {
     if (Math.abs(diffSeconds) >= seconds) {
       return relativeTimeFormat.format(Math.round(diffSeconds / seconds), unit);
@@ -241,3 +244,14 @@ export const markFavoriteSeen = (favoriteId: number): Promise<Favorite> =>
 
 export const checkFavoritesNow = (): Promise<{ checking: boolean }> =>
   request<{ checking: boolean }>('/api/favorites/check', { method: 'POST' });
+
+/** New links for a cached post whose video link expired. Costs a platform request. */
+export const fetchFreshMedia = (
+  platform: Platform,
+  username: string,
+  postId: string,
+  expiredUrl: string,
+): Promise<FreshMediaResponse> => {
+  const params = new URLSearchParams({ platform, username, postId, expiredUrl });
+  return request<FreshMediaResponse>(`/api/media/fresh?${params.toString()}`);
+};

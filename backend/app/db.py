@@ -153,6 +153,34 @@ class Favorite(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class CachedPage(Base):
+    """Scraped data kept for a month, so viewing an account again costs no platform requests."""
+
+    __tablename__ = "cached_pages"
+
+    key: Mapped[str] = mapped_column(String(300), primary_key=True)
+    platform: Mapped[str] = mapped_column(String(20))
+    # Lowercased, to drop every page of an account at once when it changed.
+    username: Mapped[str] = mapped_column(String(100))
+    payload: Mapped[dict[str, Any]] = mapped_column(JsonType)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    __table_args__ = (Index("ix_cached_pages_account", "platform", "username"),)
+
+
+class AccountSnapshot(Base):
+    """What an account looked like at the last cheap check, to tell whether to scrape again."""
+
+    __tablename__ = "account_snapshots"
+
+    platform: Mapped[str] = mapped_column(String(20), primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), primary_key=True)
+    post_count: Mapped[int | None] = mapped_column(Integer)
+    latest_story_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 # Usernames are case insensitive on both platforms.
 Index(
     "uq_favorites_platform_username",

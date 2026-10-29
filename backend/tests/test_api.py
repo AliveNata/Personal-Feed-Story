@@ -1,13 +1,15 @@
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from pydantic import BaseModel
 
+from app.cache import CachedEntry, M, Snapshot
 from app.errors import UserNotFoundError
 from app.main import app, get_budget, get_cache, get_media_session, get_sources
 from app.media import is_allowed_media_url
-from app.models import FeedPage, Post
+from app.models import FeedPage, Post, ProfileProbe
 
 
 def sample_post(post_id: str = "1") -> Post:
@@ -28,6 +30,12 @@ class FakeSource:
         self.posts = posts or []
         self.error = error
         self.calls: list[tuple[str, str | None]] = []
+        self.post_count = 10
+        self.probes = 0
+
+    async def probe(self, username: str) -> ProfileProbe:
+        self.probes += 1
+        return ProfileProbe(avatar_url="", post_count=self.post_count, latest_story_at=None)
 
     async def fetch_page(self, username: str, cursor: str | None) -> FeedPage:
         self.calls.append((username, cursor))
@@ -38,13 +46,31 @@ class FakeSource:
 
 class FakeCache:
     def __init__(self) -> None:
-        self.store: dict[str, FeedPage] = {}
+        self.store: dict[str, tuple[str, BaseModel]] = {}
+        self.snapshots: dict[tuple[str, str], Snapshot] = {}
 
-    async def get(self, key: str) -> FeedPage | None:
-        return self.store.get(key)
+    async def get(self, key: str, model: type[M]) -> CachedEntry[M] | None:
+        entry = self.store.get(key)
+        if entry is None:
+            return None
+        return CachedEntry(model.model_validate(entry[1].model_dump()), datetime.now(UTC))
 
-    async def set(self, key: str, page: FeedPage) -> None:
-        self.store[key] = page
+    async def set(self, key: str, platform: str, username: str, value: BaseModel) -> None:
+        self.store[key] = (f"{platform}:{username.lower()}", value)
+
+    async def invalidate_account(self, platform: str, username: str) -> None:
+        account = f"{platform}:{username.lower()}"
+        self.store = {k: v for k, v in self.store.items() if v[0] != account}
+
+    async def get_snapshot(self, platform: str, username: str) -> Snapshot | None:
+        return self.snapshots.get((platform, username.lower()))
+
+    async def save_snapshot(
+        self, platform: str, username: str, probe: ProfileProbe, checked_at: datetime
+    ) -> None:
+        self.snapshots[(platform, username.lower())] = Snapshot(
+            probe.post_count, probe.latest_story_at, checked_at
+        )
 
 
 @pytest.fixture
@@ -193,3 +219,25 @@ async def test_rate_limit_error_carries_retry_after(
     assert response.status_code == 429
     assert response.headers["retry-after"] == "300"
     assert response.json() == {"detail": "tunggu 5 menit", "retryAfter": 300}
+
+
+async def test_cached_feed_is_checked_cheaply_and_rescraped_only_on_change(
+    client: httpx.AsyncClient, tiktok: FakeSource, cache: FakeCache
+) -> None:
+    # Arrange: first visit scrapes and stores a baseline
+    params = {"platform": "tiktok", "username": "someone"}
+    await client.get("/api/feed", params=params)
+    snapshot = cache.snapshots[("tiktok", "someone")]
+    stale = Snapshot(snapshot.post_count, None, snapshot.checked_at - timedelta(hours=2))
+
+    # Act: check is due but nothing changed, then a new post appears
+    cache.snapshots[("tiktok", "someone")] = stale
+    unchanged = (await client.get("/api/feed", params=params)).json()
+    cache.snapshots[("tiktok", "someone")] = stale
+    tiktok.post_count = 11
+    changed = (await client.get("/api/feed", params=params)).json()
+
+    # Assert
+    assert unchanged["cached"] is True
+    assert changed["cached"] is False
+    assert len(tiktok.calls) == 2

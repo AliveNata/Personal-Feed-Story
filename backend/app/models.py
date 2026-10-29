@@ -1,11 +1,26 @@
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 Platform = Literal["instagram", "tiktok"]
+
+
+@dataclass(frozen=True)
+class ProfileProbe:
+    """Cheap snapshot of an account, used to spot new activity on favorites."""
+
+    # Raw CDN URL, proxied when sent to the browser. Empty when unknown.
+    avatar_url: str
+    # Post count is the cheapest "something new" signal on both platforms: it comes with the
+    # profile lookup, while newest post dates cost extra requests. A deleted post can hide a
+    # new one, which is acceptable for a hint.
+    post_count: int | None
+    # Newest active story item, None when there is no story or it cannot be checked.
+    latest_story_at: datetime | None
 
 
 class CamelModel(BaseModel):
@@ -41,6 +56,9 @@ class FeedPage(CamelModel):
     posts: list[Post]
     next_cursor: str | None
     stories_status: StoriesStatus
+    # Counts seen while scraping (Instagram first page), the baseline for change checks.
+    # Not stored with the page.
+    snapshot: ProfileProbe | None = Field(default=None, exclude=True)
 
 
 class RateInfo(CamelModel):
@@ -59,6 +77,9 @@ class FeedResponse(CamelModel):
     next_cursor: str | None = None
     stories_status: StoriesStatus = "none"
     rate: RateInfo | None = None
+    # When the data was scraped, and when the account was last checked for changes.
+    fetched_at: datetime | None = None
+    checked_at: datetime | None = None
 
 
 class Highlight(CamelModel):
@@ -74,6 +95,13 @@ class HighlightsResponse(CamelModel):
     status: Literal["available", "none", "login_required"]
     highlights: list[Highlight]
     rate: RateInfo | None = None
+    cached: bool = False
+
+
+class FreshMediaResponse(CamelModel):
+    # Proxied URLs in slide order, to swap in for links that expired.
+    urls: list[str]
+    rate: RateInfo | None = None
 
 
 class ReelsResponse(CamelModel):
@@ -87,6 +115,7 @@ class ReelsResponse(CamelModel):
 class HighlightItemsResponse(CamelModel):
     items: list[Post]
     rate: RateInfo | None = None
+    cached: bool = False
 
 
 def proxied_media_url(raw_url: str) -> str:

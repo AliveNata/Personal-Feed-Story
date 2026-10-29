@@ -38,6 +38,14 @@ export interface FeedResponse {
   nextCursor: string | null;
   storiesStatus: StoriesStatus;
   rate: RateInfo | null;
+  // When the data was scraped, and when the account was last checked for changes.
+  fetchedAt: string | null;
+  checkedAt: string | null;
+}
+
+export interface FreshMediaResponse {
+  urls: string[];
+  rate: RateInfo | null;
 }
 
 export interface Highlight {

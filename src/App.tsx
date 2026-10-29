@@ -17,6 +17,7 @@ interface FeedState {
   status: FeedStatus;
   posts: Post[];
   cached: boolean;
+  fetchedAt: string | null;
   errorMessage: string | null;
   nextCursor: string | null;
   storiesStatus: StoriesStatus;
@@ -29,6 +30,7 @@ const IDLE_FEED: FeedState = {
   status: 'idle',
   posts: [],
   cached: false,
+  fetchedAt: null,
   errorMessage: null,
   nextCursor: null,
   storiesStatus: 'none',
@@ -72,6 +74,7 @@ function App() {
           status: 'success',
           posts: data.posts,
           cached: data.cached,
+          fetchedAt: data.fetchedAt,
           nextCursor: data.nextCursor,
           storiesStatus: data.storiesStatus,
           rate: data.rate,
@@ -180,6 +183,7 @@ function App() {
                         username={username}
                         errorMessage={feed.errorMessage}
                         cached={feed.cached}
+                        fetchedAt={feed.fetchedAt}
                         storiesStatus={feed.storiesStatus}
                         rate={feed.rate}
                         hasMore={feed.nextCursor !== null}
