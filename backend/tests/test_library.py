@@ -1,3 +1,4 @@
+import dataclasses
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -12,7 +13,7 @@ from app.db import Blob, DownloadJob, Folder, MediaItem
 from app.errors import RateLimitedError, UserNotFoundError
 from app.library import service
 from app.library.jobs import JobRunner
-from app.library.storage import DownloadedFile, LibraryStorage
+from app.library.storage import DownloadedFile, DownloadError, LibraryStorage
 from app.library.types import ResolvedPost
 from tests.conftest import requires_db
 
@@ -50,7 +51,9 @@ class FakeResolver:
         self.fail = fail or {}
         self.calls: list[str] = []
 
-    async def resolve_media(self, username: str, post_id: str) -> ResolvedPost:
+    async def resolve_media(
+        self, username: str, post_id: str, *, fresh: bool = False
+    ) -> ResolvedPost:
         self.calls.append(post_id)
         if post_id in self.fail:
             raise self.fail[post_id]
@@ -253,3 +256,41 @@ async def test_video_store_creates_thumbnail(tmp_path: Path) -> None:
     assert (stored.media_type, stored.extension, stored.has_thumbnail) == ("video", "mp4", True)
     assert storage.thumbnail_path(downloaded.sha256).exists()
     assert not clip.exists()
+
+
+class CachedThenFreshResolver(FakeResolver):
+    """First answer comes "from cache" with a dead link, the fresh answer works."""
+
+    async def resolve_media(
+        self, username: str, post_id: str, *, fresh: bool = False
+    ) -> ResolvedPost:
+        resolved = await super().resolve_media(username, post_id)
+        if fresh:
+            return resolved
+        return dataclasses.replace(resolved, media_urls=["https://dead"], from_cache=True)
+
+
+class DeadLinkStorage(FakeCdnStorage):
+    async def download(self, url: str, headers: dict[str, str], max_bytes: int) -> DownloadedFile:
+        if url == "https://dead":
+            raise DownloadError("CDN membalas 403")
+        return await super().download(url, headers, max_bytes)
+
+
+async def test_expired_cached_link_is_resolved_again(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    # Arrange
+    storage = DeadLinkStorage(tmp_path)
+    resolver = CachedThenFreshResolver({"story-1": [PHOTO_URL_BLUE]})
+    job_id = await make_job(session_factory, "Story", ["story-1"])
+
+    # Act
+    await make_runner(session_factory, storage, resolver).run(job_id)
+
+    # Assert
+    async with session_factory() as db:
+        job = await db.get(DownloadJob, job_id)
+    assert job is not None
+    assert (job.status, job.done_posts, job.saved_items) == ("done", 1, 1)
+    assert resolver.calls == ["story-1", "story-1"]

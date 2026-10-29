@@ -8,7 +8,7 @@ from redis import Redis
 from app.config import Settings
 from app.library.storage import LibraryStorage
 from app.ratelimit import RateBudget
-from app.sources.instagram import CursorStore, InstagramSource, build_loader
+from app.sources.instagram import CursorStore, InstagramSource, MediaCache, build_loader
 from app.sources.tiktok import TikTokSource
 
 
@@ -40,6 +40,7 @@ def build_sources(settings: Settings, http_client: httpx.AsyncClient, redis: Red
         page_size=settings.instagram_page_size,
         budget=budget,
         cursors=CursorStore(redis),
+        media_cache=MediaCache(redis),
     )
     return Sources(tiktok=tiktok, instagram=instagram, budget=budget)
 

@@ -9,7 +9,8 @@ MediaType = Literal["photo", "video"]
 class ResolvedPost:
     """A post with its original media URLs, resolved right before download.
 
-    Feed data only carries covers, and CDN links expire, so the worker asks the platform again.
+    Comes from the platform, or for Instagram from the URLs cached when the feed was shown
+    (from_cache). Cached CDN links can expire, so a failed download retries with fresh=True.
     """
 
     post_id: str
@@ -20,7 +21,10 @@ class ResolvedPost:
     is_story: bool
     media_urls: list[str]
     request_headers: dict[str, str] = field(default_factory=dict)
+    from_cache: bool = False
 
 
 class MediaResolver(Protocol):
-    async def resolve_media(self, username: str, post_id: str) -> ResolvedPost: ...
+    async def resolve_media(
+        self, username: str, post_id: str, *, fresh: bool = False
+    ) -> ResolvedPost: ...

@@ -205,7 +205,10 @@ class TikTokSource:
         posts.sort(key=lambda post: post.created_at, reverse=True)
         return FeedPage(posts=posts, next_cursor=next_cursor, stories_status="not_supported")
 
-    async def resolve_media(self, username: str, post_id: str) -> ResolvedPost:
+    async def resolve_media(
+        self, username: str, post_id: str, *, fresh: bool = False
+    ) -> ResolvedPost:
+        # Always fresh: DouK's detail call is cheap and nothing is cached for TikTok.
         body = await self._post_douk(
             "/tiktok/detail", {"detail_id": post_id, "cookie": self._cookie, "source": False}
         )

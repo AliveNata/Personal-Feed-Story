@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from itertools import islice
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any, Protocol, TypeVar
 
 import instaloader
 from instaloader.exceptions import (
+    AbortDownloadException,
     ConnectionException,
     InvalidArgumentException,
     LoginRequiredException,
@@ -44,6 +46,11 @@ CURSOR_TTL_SECONDS = 30 * 60
 # than this means "close to the limit": stop and tell the user instead of hanging the request.
 MAX_ACCEPTABLE_WAIT_SECONDS = 10
 COOLDOWN_AFTER_429_SECONDS = 15 * 60
+# "feedback_required" is Instagram limiting actions on the account itself, so back off longer.
+COOLDOWN_AFTER_FEEDBACK_SECONDS = 30 * 60
+# Media URLs seen in the feed are reused for downloads, so the worker sends no extra queries.
+# IG CDN links stay valid for days, half a day keeps them well inside that.
+MEDIA_CACHE_TTL_SECONDS = 12 * 60 * 60
 
 T = TypeVar("T")
 
@@ -250,6 +257,85 @@ class CursorStore:
         return state
 
 
+@dataclass(frozen=True)
+class CachedMedia:
+    media_urls: list[str]
+    caption: str
+    permalink: str | None
+    posted_at: datetime
+    is_story: bool
+
+
+class MediaCache:
+    """Original media URLs per post or story item, written when the feed shows them."""
+
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
+
+    def put_many(self, entries: dict[str, CachedMedia]) -> None:
+        if not entries:
+            return
+        try:
+            pipe = self._redis.pipeline()
+            for post_id, media in entries.items():
+                payload = {**asdict(media), "posted_at": media.posted_at.isoformat()}
+                pipe.set(f"igmedia:{post_id}", json.dumps(payload), ex=MEDIA_CACHE_TTL_SECONDS)
+            pipe.execute()
+        except RedisError as exc:
+            # Downloads still work without it, they just cost Instagram queries.
+            logger.warning("could not cache instagram media urls: %s", exc)
+
+    def get(self, post_id: str) -> CachedMedia | None:
+        try:
+            raw = self._redis.get(f"igmedia:{post_id}")
+        except RedisError as exc:
+            logger.warning("could not read instagram media cache: %s", exc)
+            return None
+        if raw is None:
+            return None
+        data: dict[str, Any] = json.loads(raw)  # type: ignore[arg-type]
+        return CachedMedia(
+            media_urls=list(data["media_urls"]),
+            caption=str(data["caption"]),
+            permalink=data["permalink"],
+            posted_at=datetime.fromisoformat(data["posted_at"]),
+            is_story=bool(data["is_story"]),
+        )
+
+    def forget(self, post_id: str) -> None:
+        try:
+            self._redis.delete(f"igmedia:{post_id}")
+        except RedisError as exc:
+            logger.warning("could not drop instagram media cache entry: %s", exc)
+
+
+def _story_media(item: InstagramStoryItemLike) -> CachedMedia:
+    url = item.video_url if item.is_video and item.video_url else item.url
+    return CachedMedia(
+        media_urls=[url],
+        caption=item.caption or "",
+        permalink=None,
+        posted_at=_as_utc(item.date_utc),
+        is_story=True,
+    )
+
+
+def _resolved(
+    post_id: str, username: str, media: CachedMedia, *, from_cache: bool = False
+) -> ResolvedPost:
+    return ResolvedPost(
+        post_id=post_id,
+        author_username=username,
+        caption=media.caption,
+        permalink=media.permalink,
+        posted_at=media.posted_at,
+        is_story=media.is_story,
+        media_urls=media.media_urls,
+        request_headers={"Referer": "https://www.instagram.com/"},
+        from_cache=from_cache,
+    )
+
+
 class InstagramSource:
     def __init__(
         self,
@@ -259,12 +345,14 @@ class InstagramSource:
         page_size: int = 12,
         budget: RateBudget | None = None,
         cursors: CursorStore | None = None,
+        media_cache: MediaCache | None = None,
     ) -> None:
         self._loader = loader
         self._include_stories = include_stories
         self._page_size = page_size
         self._budget = budget
         self._cursors = cursors
+        self._media_cache = media_cache
         # instaloader is sync and keeps one HTTP session, so serialize calls through it.
         self._lock = threading.Lock()
 
@@ -288,6 +376,16 @@ class InstagramSource:
             raise UserNotFoundError("Akun atau post Instagram tidak ditemukan") from exc
         except (PrivateProfileNotFollowedException, LoginRequiredException) as exc:
             raise PrivateAccountError("Akun ini private atau butuh login Instagram") from exc
+        except AbortDownloadException as exc:
+            # Raised for 400 "feedback_required" and similar: Instagram is limiting this account.
+            logger.error("instagram aborted the request: %s", exc)
+            if self._budget is not None:
+                self._budget.cooldown(PLATFORM, COOLDOWN_AFTER_FEEDBACK_SECONDS)
+            raise RateLimitedError(
+                "Instagram membatasi akun ini (feedback_required). Istirahat dulu sekitar "
+                f"{COOLDOWN_AFTER_FEEDBACK_SECONDS // 60} menit, lalu coba lagi pelan pelan",
+                retry_after=COOLDOWN_AFTER_FEEDBACK_SECONDS,
+            ) from exc
         except QueryReturnedForbiddenException as exc:
             raise UpstreamError("Instagram menolak request (403), cek session") from exc
         except ConnectionException as exc:
@@ -309,9 +407,20 @@ class InstagramSource:
             except InvalidArgumentException as exc:
                 raise UpstreamError("Halaman berikutnya kedaluwarsa, klik Scrape ulang") from exc
 
-        posts = [
-            map_instagram_post(p, instagram_slides(p)) for p in islice(iterator, self._page_size)
-        ]
+        posts: list[Post] = []
+        to_cache: dict[str, CachedMedia] = {}
+        for item in islice(iterator, self._page_size):
+            post = map_instagram_post(item, instagram_slides(item))
+            posts.append(post)
+            to_cache[post.id] = CachedMedia(
+                media_urls=instagram_media_urls(item),
+                caption=post.caption,
+                permalink=post.permalink,
+                posted_at=post.created_at,
+                is_story=False,
+            )
+        if self._media_cache is not None:
+            self._media_cache.put_many(to_cache)
         next_cursor = None
         if self._cursors is not None and iterator.total_index < profile.mediacount:
             next_cursor = self._cursors.put(iterator.freeze()._asdict())
@@ -328,11 +437,13 @@ class InstagramSource:
         if not self._include_stories or not self._loader.context.is_logged_in:
             return [], "login_required"
         try:
-            items = [
-                map_instagram_story_item(item)
+            raw_items = [
+                item
                 for story in self._loader.get_stories(userids=[user_id])
                 for item in story.get_items()
             ]
+            items = [map_instagram_story_item(item) for item in raw_items]
+            self._cache_story_items(raw_items)
         except TooManyRequestsException:
             raise
         except ConnectionException as exc:
@@ -380,33 +491,76 @@ class InstagramSource:
         profile = instaloader.Profile.from_username(self._loader.context, username)
         for highlight in self._loader.get_highlights(profile.userid):
             if str(highlight.unique_id) == highlight_id:
-                return [map_instagram_story_item(item) for item in highlight.get_items()]
+                raw_items = list(highlight.get_items())
+                self._cache_story_items(raw_items)
+                return [map_instagram_story_item(item) for item in raw_items]
         raise UserNotFoundError("Highlight tidak ditemukan")
 
-    async def resolve_media(self, username: str, post_id: str) -> ResolvedPost:
-        return await self._run(lambda: self._resolve_media_sync(username, post_id), cost=1)
+    def _find_story_item(self, username: str, post_id: str) -> CachedMedia:
+        """Find a story or highlight item through the reel lists.
+
+        StoryItem.from_mediaid uses an old GraphQL query that Instagram answers with
+        400 "feedback_required" for many accounts, so it is not used.
+        """
+        profile = instaloader.Profile.from_username(self._loader.context, username)
+        wanted = int(post_id.removeprefix(STORY_ID_PREFIX))
+        for story in self._loader.get_stories(userids=[profile.userid]):
+            items = list(story.get_items())
+            self._cache_story_items(items)
+            for item in items:
+                if item.mediaid == wanted:
+                    return _story_media(item)
+        for highlight in self._loader.get_highlights(profile.userid):
+            items = list(highlight.get_items())
+            self._cache_story_items(items)
+            for item in items:
+                if item.mediaid == wanted:
+                    return _story_media(item)
+        raise UserNotFoundError("Story sudah kedaluwarsa atau highlight-nya sudah dihapus")
+
+    def _cache_post(self, post_id: str, post: Any) -> None:
+        if self._media_cache is not None:
+            self._media_cache.put_many(
+                {
+                    post_id: CachedMedia(
+                        media_urls=instagram_media_urls(post),
+                        caption=post.caption or "",
+                        permalink=f"https://www.instagram.com/p/{post_id}/",
+                        posted_at=_as_utc(post.date_utc),
+                        is_story=False,
+                    )
+                }
+            )
+
+    def _cache_story_items(self, items: Iterable[InstagramStoryItemLike]) -> None:
+        if self._media_cache is not None:
+            self._media_cache.put_many(
+                {f"{STORY_ID_PREFIX}{item.mediaid}": _story_media(item) for item in items}
+            )
+
+    async def resolve_media(
+        self, username: str, post_id: str, *, fresh: bool = False
+    ) -> ResolvedPost:
+        if self._media_cache is not None:
+            if fresh:
+                await asyncio.to_thread(self._media_cache.forget, post_id)
+            elif cached := await asyncio.to_thread(self._media_cache.get, post_id):
+                return _resolved(post_id, username, cached, from_cache=True)
+        is_story = post_id.startswith(STORY_ID_PREFIX)
+        # A story lookup lists the profile, its stories and maybe its highlights.
+        return await self._run(
+            lambda: self._resolve_media_sync(username, post_id), cost=3 if is_story else 1
+        )
 
     def _resolve_media_sync(self, username: str, post_id: str) -> ResolvedPost:
         context = self._loader.context
         if post_id.startswith(STORY_ID_PREFIX):
             if not context.is_logged_in:
                 raise PrivateAccountError("Download story butuh session Instagram")
-            item = instaloader.StoryItem.from_mediaid(
-                context, int(post_id.removeprefix(STORY_ID_PREFIX))
-            )
-            url = item.video_url if item.is_video and item.video_url else item.url
-            return ResolvedPost(
-                post_id=post_id,
-                author_username=username,
-                caption=item.caption or "",
-                permalink=None,
-                posted_at=_as_utc(item.date_utc),
-                is_story=True,
-                media_urls=[url],
-                request_headers={"Referer": "https://www.instagram.com/"},
-            )
+            return _resolved(post_id, username, self._find_story_item(username, post_id))
 
         post = instaloader.Post.from_shortcode(context, post_id)
+        self._cache_post(post_id, post)
         return ResolvedPost(
             post_id=post_id,
             author_username=username,

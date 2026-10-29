@@ -1,7 +1,16 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
+import fakeredis
+import pytest
+from instaloader.exceptions import AbortDownloadException
+
+from app.errors import RateLimitedError
 from app.sources.instagram import (
+    CachedMedia,
+    InstagramSource,
+    MediaCache,
     _to_highlight,
     instagram_media_urls,
     instagram_slides,
@@ -170,3 +179,68 @@ def test_highlight_uses_cropped_cover_when_full_missing() -> None:
     # Assert
     assert "crop.jpg" in highlight.cover_url
     assert highlight.fallback_cover_url is None
+
+
+def make_source(redis: fakeredis.FakeRedis) -> InstagramSource:
+    loader = SimpleNamespace(context=SimpleNamespace(is_logged_in=True))
+    return InstagramSource(loader, True, media_cache=MediaCache(redis))  # type: ignore[arg-type]
+
+
+async def test_resolve_media_uses_urls_cached_from_the_feed() -> None:
+    # Arrange
+    redis = fakeredis.FakeRedis()
+    source = make_source(redis)
+    story = FakeStoryItem(
+        mediaid=42,
+        url="https://scontent.cdninstagram.com/cover.jpg",
+        caption="halo",
+        date_utc=datetime(2026, 10, 29, 1, 0),
+        is_video=True,
+        video_url="https://scontent.cdninstagram.com/clip.mp4",
+    )
+    source._cache_story_items([story])
+
+    # Act
+    resolved = await source.resolve_media("someone", "story-42")
+
+    # Assert
+    assert resolved.from_cache is True
+    assert resolved.is_story is True
+    assert resolved.media_urls == ["https://scontent.cdninstagram.com/clip.mp4"]
+    assert resolved.posted_at == datetime(2026, 10, 29, 1, 0, tzinfo=UTC)
+
+
+async def test_fresh_resolve_drops_the_cached_entry() -> None:
+    # Arrange
+    redis = fakeredis.FakeRedis()
+    cache = MediaCache(redis)
+    cache.put_many(
+        {
+            "ABC": CachedMedia(
+                media_urls=["https://scontent.cdninstagram.com/a.jpg"],
+                caption="",
+                permalink=None,
+                posted_at=datetime(2026, 10, 29, tzinfo=UTC),
+                is_story=False,
+            )
+        }
+    )
+
+    # Act
+    cache.forget("ABC")
+
+    # Assert
+    assert cache.get("ABC") is None
+
+
+def test_feedback_required_becomes_rate_limit() -> None:
+    # Arrange
+    source = make_source(fakeredis.FakeRedis())
+
+    def blocked() -> None:
+        raise AbortDownloadException('400 Bad Request - "fail" status, message "feedback_required"')
+
+    # Act / Assert
+    with pytest.raises(RateLimitedError) as caught:
+        source._guarded(blocked)
+    assert caught.value.retry_after == 30 * 60

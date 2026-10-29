@@ -224,6 +224,7 @@ If Redis is down the API keeps working without cache and logs a warning.
 - CDN media links are signed and expire. If covers stop loading, use "Scrape ulang" to bypass the cache.
 - Download jobs run one at a time. Instagram waits 4 to 9 seconds between posts by default (`INSTAGRAM_DELAY_SECONDS`), TikTok 1 to 3 (`TIKTOK_DELAY_SECONDS`). A rate limit stops the rest of the job.
 - Story download needs the Instagram session, and stories expire after 24 hours.
+- Instagram downloads reuse the media URLs cached in Redis when the feed, story or highlight was shown (12 hours), so a download sends no extra Instagram queries. Older items, or links that expired, are looked up again. An Instagram `feedback_required` answer means the account is being limited: the app stops Instagram for 30 minutes.
 - Favorite checks compare the post count from the profile lookup (1 request per account, plus 1 for Instagram stories). A deleted post can hide a new one. Background checks stop once 70% of a platform budget is used, so manual scraping keeps some room.
 - `COMPRESS_PHOTOS` (WebP) and `TRANSCODE_VIDEOS` (H.265) are off by default and only apply to new downloads. H.265 does not play in Firefox.
 - Scraping goes against the TikTok and Instagram terms of service. Use secondary accounts and keep request volume low.

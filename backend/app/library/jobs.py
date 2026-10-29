@@ -64,7 +64,17 @@ class JobRunner:
                 await self._sleep(random.uniform(low, high))
             try:
                 resolved = await resolver.resolve_media(username, post_id)
-                saved, skipped = await self._save_post(folder_id, platform, resolved)
+                try:
+                    saved, skipped = await self._save_post(folder_id, platform, resolved)
+                except DownloadError:
+                    if not resolved.from_cache:
+                        raise
+                    # Cached CDN link expired: ask the platform once for a new one.
+                    logger.info(
+                        "job %s post %s: cached link failed, resolving again", job_id, post_id
+                    )
+                    resolved = await resolver.resolve_media(username, post_id, fresh=True)
+                    saved, skipped = await self._save_post(folder_id, platform, resolved)
             except RateLimitedError as exc:
                 # Continuing would only dig the rate limit deeper, so fail the rest at once.
                 remaining = post_ids[position:]
