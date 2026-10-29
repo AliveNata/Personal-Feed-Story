@@ -237,6 +237,15 @@ def _safe_cover(highlight: Any, attribute: str) -> str:
         return ""
 
 
+# How Instagram says "slow down" besides a plain 429: a 401 with this message, among others.
+THROTTLE_HINTS = ("429", "please wait a few minutes", "too many requests", "rate limit")
+
+
+def _is_throttle(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(hint in text for hint in THROTTLE_HINTS)
+
+
 def _has_more(iterator: Any) -> bool:
     """Whether a NodeIterator has items left, without pulling one (that would cost a query).
 
@@ -422,6 +431,12 @@ class InstagramSource:
             raise UpstreamError("Instagram menolak request (403), cek session") from exc
         except ConnectionException as exc:
             logger.error("instagram request failed: %s", exc)
+            if _is_throttle(exc):
+                if self._budget is not None:
+                    self._budget.cooldown(PLATFORM, COOLDOWN_AFTER_429_SECONDS)
+                raise RateLimitedError(
+                    wait_message(COOLDOWN_AFTER_429_SECONDS), retry_after=COOLDOWN_AFTER_429_SECONDS
+                ) from exc
             raise UpstreamError("Gagal mengambil data Instagram") from exc
 
     # Any, like instaloader's own untyped returns: its Post class does not match our Protocols.
@@ -444,7 +459,7 @@ class InstagramSource:
                 )
             except (ConnectionException, AbortDownloadException) as api_error:
                 logger.warning("instagram profile API failed for %s: %s", username, api_error)
-                if isinstance(api_error, TooManyRequestsException) or "429" in str(api_error):
+                if isinstance(api_error, TooManyRequestsException) or _is_throttle(api_error):
                     # A limited session is also why the page came back empty, so this is a
                     # rate limit, not a missing account.
                     if self._budget is not None:

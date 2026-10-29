@@ -351,3 +351,21 @@ def test_profile_api_429_is_a_rate_limit_not_a_missing_account(
     with pytest.raises(RateLimitedError):
         source._guarded(lambda: source._profile("linuarinuja_new"))
     assert budget.status("instagram").wait_seconds > 0
+
+
+def test_401_please_wait_is_a_rate_limit_with_cooldown() -> None:
+    # Arrange
+    budget = RateBudget(fakeredis.FakeRedis(), {"instagram": (100, 900)})
+    loader = SimpleNamespace(context=SimpleNamespace(is_logged_in=True))
+    source = InstagramSource(loader, True, budget=budget)  # type: ignore[arg-type]
+
+    def throttled() -> None:
+        raise ConnectionException(
+            'JSON Query to graphql/query: 401 Unauthorized - "fail" status, message '
+            '"Please wait a few minutes before you try again."'
+        )
+
+    # Act / Assert
+    with pytest.raises(RateLimitedError):
+        source._guarded(throttled)
+    assert budget.status("instagram").wait_seconds > 0
