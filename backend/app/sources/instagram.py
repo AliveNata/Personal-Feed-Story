@@ -391,8 +391,20 @@ class InstagramSource:
         except TooManyRequestsException as exc:
             wait = self._budget.status(PLATFORM).wait_seconds if self._budget else 0
             raise RateLimitedError(wait_message(wait or 60), retry_after=wait or 60) from exc
-        except (ProfileNotExistsException, QueryReturnedNotFoundException) as exc:
-            raise UserNotFoundError("Akun atau post Instagram tidak ditemukan") from exc
+        except ProfileNotExistsException as exc:
+            # Instagram answers "no such user" for more than typos: age or country restricted
+            # accounts, accounts that blocked the session, and sessions it is limiting.
+            logger.warning("instagram profile lookup empty: %s", exc)
+            raise UserNotFoundError(
+                "Instagram tidak memberi data profil ini. Kalau username sudah benar, bisa karena "
+                "akunnya dibatasi umur atau negara, memblokir akun di IG_USERNAME, atau session "
+                "IG sedang dibatasi (feedback_required). Coba buka profilnya pakai akun yang sama"
+            ) from exc
+        except QueryReturnedNotFoundException as exc:
+            logger.warning("instagram query returned 404: %s", exc)
+            raise UserNotFoundError(
+                "Instagram membalas 404 saat mengambil data. Cek log backend untuk query mana"
+            ) from exc
         except (PrivateProfileNotFollowedException, LoginRequiredException) as exc:
             raise PrivateAccountError("Akun ini private atau butuh login Instagram") from exc
         except AbortDownloadException as exc:
