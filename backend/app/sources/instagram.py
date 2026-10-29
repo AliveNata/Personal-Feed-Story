@@ -423,11 +423,37 @@ class InstagramSource:
             logger.error("instagram request failed: %s", exc)
             raise UpstreamError("Gagal mengambil data Instagram") from exc
 
+    # Any, like instaloader's own untyped returns: its Post class does not match our Protocols.
+    def _profile(self, username: str) -> Any:
+        """Look up a profile, with a second route when the first finds nothing.
+
+        instaloader reads the profile from the embedded data of its web page. Instagram leaves
+        that data out for some accounts that do exist, so ask the web_profile_info API next.
+        """
+        context = self._loader.context
+        try:
+            return instaloader.Profile.from_username(context, username)
+        except ProfileNotExistsException as page_error:
+            logger.info(
+                "instagram profile page had no data for %s, trying the profile API", username
+            )
+            try:
+                data = context.get_json(
+                    "api/v1/users/web_profile_info/", params={"username": username}
+                )
+            except (ConnectionException, AbortDownloadException) as api_error:
+                logger.warning("instagram profile API failed for %s: %s", username, api_error)
+                raise page_error from api_error
+            user = (data.get("data") or {}).get("user")
+            if not isinstance(user, dict) or not user.get("id"):
+                raise
+            return instaloader.Profile(context, user)
+
     async def fetch_page(self, username: str, cursor: str | None) -> FeedPage:
         return await self._run(lambda: self._fetch_page_sync(username, cursor), cost=3)
 
     def _fetch_page_sync(self, username: str, cursor: str | None) -> FeedPage:
-        profile = instaloader.Profile.from_username(self._loader.context, username)
+        profile = self._profile(username)
         iterator = profile.get_posts()
         if cursor:
             state = self._cursors.get(cursor) if self._cursors else None
@@ -489,7 +515,7 @@ class InstagramSource:
         return await self._run(lambda: self._probe_sync(username), cost=2 if logged_in else 1)
 
     def _probe_sync(self, username: str) -> ProfileProbe:
-        profile = instaloader.Profile.from_username(self._loader.context, username)
+        profile = self._profile(username)
         latest_story_at = None
         if self._include_stories and self._loader.context.is_logged_in:
             # Story.latest_media_utc comes with the reel list, so no per item requests.
@@ -526,7 +552,7 @@ class InstagramSource:
         return ("available" if posts or cursor else "none"), posts, next_cursor
 
     def _fetch_reels_sync(self, username: str, cursor: str | None) -> tuple[list[Post], str | None]:
-        profile = instaloader.Profile.from_username(self._loader.context, username)
+        profile = self._profile(username)
         iterator = profile.get_reels()
         if cursor:
             state = self._cursors.get(cursor) if self._cursors else None
@@ -555,7 +581,7 @@ class InstagramSource:
         return await self._run(lambda: self._list_highlights_sync(username), cost=2)
 
     def _list_highlights_sync(self, username: str) -> tuple[str, list[Highlight]]:
-        profile = instaloader.Profile.from_username(self._loader.context, username)
+        profile = self._profile(username)
         highlights = [_to_highlight(item) for item in self._loader.get_highlights(profile.userid)]
         return ("available" if highlights else "none"), highlights
 
@@ -565,7 +591,7 @@ class InstagramSource:
         return await self._run(lambda: self._highlight_items_sync(username, highlight_id), cost=3)
 
     def _highlight_items_sync(self, username: str, highlight_id: str) -> list[Post]:
-        profile = instaloader.Profile.from_username(self._loader.context, username)
+        profile = self._profile(username)
         for highlight in self._loader.get_highlights(profile.userid):
             if str(highlight.unique_id) == highlight_id:
                 raw_items = list(highlight.get_items())
@@ -579,7 +605,7 @@ class InstagramSource:
         StoryItem.from_mediaid uses an old GraphQL query that Instagram answers with
         400 "feedback_required" for many accounts, so it is not used.
         """
-        profile = instaloader.Profile.from_username(self._loader.context, username)
+        profile = self._profile(username)
         wanted = int(post_id.removeprefix(STORY_ID_PREFIX))
         for story in self._loader.get_stories(userids=[profile.userid]):
             items = list(story.get_items())

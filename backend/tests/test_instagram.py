@@ -3,8 +3,9 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import fakeredis
+import instaloader
 import pytest
-from instaloader.exceptions import AbortDownloadException
+from instaloader.exceptions import AbortDownloadException, ProfileNotExistsException
 
 from app.errors import RateLimitedError
 from app.ratelimit import RateBudget
@@ -288,3 +289,40 @@ def test_has_more_reads_page_state_without_pulling_items() -> None:
     assert _has_more(last_page) is False
     assert _has_more(mid_page) is True
     assert _has_more(object()) is True
+
+
+def test_profile_falls_back_to_profile_api_when_page_has_no_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    def page_without_data(context: object, username: str) -> None:
+        raise ProfileNotExistsException(f"Profile {username} does not exist.")
+
+    monkeypatch.setattr(instaloader.Profile, "from_username", page_without_data)
+    api_user = {"id": "123", "username": "linuarinuja_new", "edge_owner_to_timeline_media": {}}
+    context = SimpleNamespace(
+        is_logged_in=True, get_json=lambda path, params: {"data": {"user": api_user}}
+    )
+    source = InstagramSource(SimpleNamespace(context=context), True)  # type: ignore[arg-type]
+
+    # Act
+    profile = source._profile("linuarinuja_new")
+
+    # Assert
+    assert profile.userid == 123
+
+
+def test_profile_still_missing_when_api_has_no_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Arrange
+    def page_without_data(context: object, username: str) -> None:
+        raise ProfileNotExistsException("nope")
+
+    monkeypatch.setattr(instaloader.Profile, "from_username", page_without_data)
+    context = SimpleNamespace(
+        is_logged_in=True, get_json=lambda path, params: {"data": {"user": None}}
+    )
+    source = InstagramSource(SimpleNamespace(context=context), True)  # type: ignore[arg-type]
+
+    # Act / Assert
+    with pytest.raises(ProfileNotExistsException):
+        source._profile("ghost")
