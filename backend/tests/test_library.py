@@ -348,3 +348,28 @@ async def test_job_reports_percent_per_post_across_its_files(
     # Assert
     assert [percent for _, percent in progress.reports] == [0, 25, 50, 75, 100]
     assert progress.cleared == [job_id]
+
+
+async def test_random_previews_skip_repeated_files_and_respect_limit(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    # Arrange: same blue photo in two posts, plus a red one
+    storage = FakeCdnStorage(tmp_path)
+    resolver = FakeResolver({"a": [PHOTO_URL_BLUE], "b": [PHOTO_URL_BLUE], "c": [PHOTO_URL_RED]})
+    job_id = await make_job(session_factory, "Preview", ["a", "b", "c"])
+    await make_runner(session_factory, storage, resolver).run(job_id)
+
+    # Act
+    async with session_factory() as db:
+        previews = await service.random_previews(db)
+        limited = await service.random_previews(db, limit=1)
+        blobs = {
+            item.blob_sha256
+            for item in (await db.scalars(select(MediaItem))).all()
+            if item.id in next(iter(previews.values()))
+        }
+
+    # Assert
+    assert len(next(iter(previews.values()))) == 2
+    assert len(blobs) == 2
+    assert len(next(iter(limited.values()))) == 1

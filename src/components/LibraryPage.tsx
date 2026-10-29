@@ -2,13 +2,12 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Folder } from '../types';
 import { ApiError, deleteFolder, fetchFolders, formatBytes } from '../utils/api';
+import FolderBackdrop from './FolderBackdrop';
 import UploadDialog from './UploadDialog';
 import { ConfirmDelete, Panel, focusRing, primaryButton, secondaryButton } from './ui';
 
 type LoadState =
-  | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; folders: Folder[] };
+  { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; folders: Folder[] };
 
 const dateFormat = new Intl.DateTimeFormat('id', { dateStyle: 'medium' });
 
@@ -73,33 +72,45 @@ const LibraryPage: React.FC = () => {
       )}
 
       {state.status === 'ready' && state.folders.length > 0 && (
-        <ul className="bg-white rounded-lg shadow-md divide-y divide-gray-200">
-          {state.folders.map((folder) => (
-            <li key={folder.id} className="flex flex-col gap-3 p-4 md:flex-row md:items-center">
-              <div className="min-w-0 flex-1">
-                <Link
-                  to={`/library/${folder.id}`}
-                  className={`text-lg font-semibold text-gray-900 underline-offset-4 hover:underline break-words ${focusRing}`}
-                >
-                  {folder.name}
-                </Link>
-                <p className="text-sm text-gray-700">
-                  {folder.photoCount} foto, {folder.videoCount} video, {formatBytes(folder.sizeBytes)}
-                  {' · '}dibuat {dateFormat.format(new Date(folder.createdAt))}
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button type="button" className={secondaryButton} onClick={() => setUploadTarget(folder)}>
-                  Tambah file
-                </button>
-                <ConfirmDelete
-                  label="Hapus folder"
-                  confirmText={`Hapus "${folder.name}" beserta semua isinya?`}
-                  onConfirm={() => handleDelete(folder.id)}
-                />
-              </div>
-            </li>
-          ))}
+        <ul className="overflow-hidden bg-white rounded-lg shadow-md divide-y divide-gray-200">
+          {state.folders.map((folder) => {
+            const hasBackdrop = folder.previewUrls.length > 0;
+            return (
+              <li
+                key={folder.id}
+                className={`relative flex flex-col gap-3 p-4 md:flex-row md:items-center ${hasBackdrop ? 'bg-gray-950 py-6' : ''}`}
+              >
+                {hasBackdrop && <FolderBackdrop urls={folder.previewUrls} />}
+                <div className="relative min-w-0 flex-1">
+                  <Link
+                    to={`/library/${folder.id}`}
+                    className={`text-lg font-semibold underline-offset-4 hover:underline break-words ${
+                      hasBackdrop
+                        ? 'text-white focus-visible:ring-white focus-visible:ring-offset-gray-950'
+                        : 'text-gray-900'
+                    } ${focusRing}`}
+                  >
+                    {folder.name}
+                  </Link>
+                  <p className={`text-sm ${hasBackdrop ? 'text-gray-200' : 'text-gray-700'}`}>
+                    {folder.photoCount} foto, {folder.videoCount} video, {formatBytes(folder.sizeBytes)}
+                    {' · '}dibuat {dateFormat.format(new Date(folder.createdAt))}
+                  </p>
+                </div>
+                <div className="relative flex flex-wrap items-center gap-2">
+                  <button type="button" className={secondaryButton} onClick={() => setUploadTarget(folder)}>
+                    Tambah file
+                  </button>
+                  <ConfirmDelete
+                    label="Hapus folder"
+                    confirmText={`Hapus "${folder.name}" beserta semua isinya?`}
+                    onConfirm={() => handleDelete(folder.id)}
+                    isOnDark={hasBackdrop}
+                  />
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
 

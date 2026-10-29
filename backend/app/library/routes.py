@@ -85,6 +85,8 @@ class FolderResponse(CamelModel):
     size_bytes: int
     created_at: datetime
     counts: SourceCounts
+    # Random thumbnails for the folder row background, different on every load.
+    preview_urls: list[str] = Field(default_factory=list)
 
 
 class MediaItemResponse(CamelModel):
@@ -107,7 +109,9 @@ def _job_response(job: DownloadJob) -> JobResponse:
     return JobResponse.model_validate(job, from_attributes=True)
 
 
-def _folder_response(summary: service.FolderSummary) -> FolderResponse:
+def _folder_response(
+    summary: service.FolderSummary, preview_ids: list[int] | None = None
+) -> FolderResponse:
     return FolderResponse(
         id=summary.folder.id,
         name=summary.folder.name,
@@ -116,6 +120,7 @@ def _folder_response(summary: service.FolderSummary) -> FolderResponse:
         size_bytes=summary.size_bytes,
         created_at=summary.folder.created_at,
         counts=SourceCounts.model_validate(summary.counts),
+        preview_urls=[f"/api/items/{item_id}/thumbnail" for item_id in preview_ids or []],
     )
 
 
@@ -172,7 +177,11 @@ async def get_job(
 
 @router.get("/folders", response_model=list[FolderResponse])
 async def list_folders(db: DbSession) -> list[FolderResponse]:
-    return [_folder_response(summary) for summary in await service.list_folders(db)]
+    previews = await service.random_previews(db)
+    return [
+        _folder_response(summary, previews.get(summary.folder.id))
+        for summary in await service.list_folders(db)
+    ]
 
 
 @router.get("/folders/{folder_id}", response_model=FolderResponse)

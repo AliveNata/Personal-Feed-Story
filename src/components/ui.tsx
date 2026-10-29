@@ -27,10 +27,17 @@ interface ConfirmDeleteProps {
   label: string;
   confirmText: string;
   onConfirm: () => Promise<void>;
+  // Over a photo backdrop the question and error need light text.
+  isOnDark?: boolean;
 }
 
 /** Two step delete inline, instead of window.confirm, so it stays keyboard and screen reader friendly. */
-export const ConfirmDelete: React.FC<ConfirmDeleteProps> = ({ label, confirmText, onConfirm }) => {
+export const ConfirmDelete: React.FC<ConfirmDeleteProps> = ({
+  label,
+  confirmText,
+  onConfirm,
+  isOnDark = false,
+}) => {
   const [isAsking, setIsAsking] = React.useState(false);
   const [isWorking, setIsWorking] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -57,15 +64,20 @@ export const ConfirmDelete: React.FC<ConfirmDeleteProps> = ({ label, confirmText
 
   return (
     <div role="group" aria-label={confirmText} className="flex flex-wrap items-center gap-2">
-      <span className="text-sm text-gray-800">{confirmText}</span>
+      <span className={`text-sm ${isOnDark ? 'text-white' : 'text-gray-800'}`}>{confirmText}</span>
       <button type="button" className={dangerButton} onClick={handleConfirm} disabled={isWorking} autoFocus>
         {isWorking ? 'Menghapus...' : 'Ya, hapus'}
       </button>
-      <button type="button" className={secondaryButton} onClick={() => setIsAsking(false)} disabled={isWorking}>
+      <button
+        type="button"
+        className={secondaryButton}
+        onClick={() => setIsAsking(false)}
+        disabled={isWorking}
+      >
         Batal
       </button>
       {error && (
-        <span role="alert" className="text-sm text-red-700">
+        <span role="alert" className={`text-sm ${isOnDark ? 'text-red-200' : 'text-red-700'}`}>
           {error}
         </span>
       )}

@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import case, delete, func, select
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -166,6 +167,34 @@ async def list_folders(db: AsyncSession) -> list[FolderSummary]:
     return [
         FolderSummary(f, int(p), int(v), int(s), counts.get(f.id, empty)) for f, p, v, s in folders
     ]
+
+
+# Enough photos for the folder row background to pan across on a wide screen.
+PREVIEW_LIMIT = 12
+
+
+async def random_previews(db: AsyncSession, limit: int = PREVIEW_LIMIT) -> dict[int, list[int]]:
+    """Random item ids with a thumbnail per folder, one per distinct file so none repeats."""
+    per_blob = (
+        select(MediaItem.folder_id, MediaItem.id)
+        .join(Blob, Blob.sha256 == MediaItem.blob_sha256)
+        .where(Blob.has_thumbnail.is_(True))
+        # The same bytes can sit in a folder twice (post and story), keep one of them.
+        .ext(distinct_on(MediaItem.folder_id, MediaItem.blob_sha256))
+        .order_by(MediaItem.folder_id, MediaItem.blob_sha256, MediaItem.id)
+        .subquery()
+    )
+    rank = (
+        func.row_number()
+        .over(partition_by=per_blob.c.folder_id, order_by=func.random())
+        .label("rank")
+    )
+    ranked = select(per_blob.c.folder_id, per_blob.c.id, rank).subquery()
+    rows = await db.execute(select(ranked.c.folder_id, ranked.c.id).where(ranked.c.rank <= limit))
+    previews: dict[int, list[int]] = {}
+    for folder_id, item_id in rows.all():
+        previews.setdefault(folder_id, []).append(item_id)
+    return previews
 
 
 async def get_folder_summary(db: AsyncSession, folder_id: int) -> FolderSummary | None:

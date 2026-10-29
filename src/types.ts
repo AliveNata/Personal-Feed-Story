@@ -99,6 +99,8 @@ export interface Folder {
   sizeBytes: number;
   createdAt: string;
   counts: Record<MediaSource, Record<MediaType, number>>;
+  // Random thumbnails from the folder, no file twice. Empty for an empty folder.
+  previewUrls: string[];
 }
 
 export interface MediaItem {
