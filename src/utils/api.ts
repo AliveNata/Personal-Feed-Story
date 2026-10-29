@@ -197,6 +197,17 @@ export const lookupDownloaded = async (
 export const deleteItem = (itemId: number): Promise<void> =>
   request<void>(`/api/items/${itemId}`, { method: 'DELETE' });
 
+export interface MoveResult {
+  folderId: number;
+  folderName: string;
+  moved: number;
+  // Already in the target folder, so the copy here was dropped instead of moved.
+  merged: number;
+}
+
+export const moveItems = (itemIds: number[], folderName: string): Promise<MoveResult> =>
+  request<MoveResult>('/api/items/move', { method: 'POST', json: { itemIds, folderName } });
+
 const relativeTimeFormat = new Intl.RelativeTimeFormat('id', { numeric: 'auto' });
 const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
   ['year', 365 * 24 * 3600],

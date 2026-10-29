@@ -11,7 +11,7 @@ from app.db import User
 from app.library.jobs import JobRunner
 from app.main import app
 from tests.conftest import requires_db
-from tests.test_library import PHOTO_URL_BLUE, FakeCdnStorage, FakeResolver, no_sleep
+from tests.test_library import PHOTO_URL_BLUE, PHOTO_URL_RED, FakeCdnStorage, FakeResolver, no_sleep
 
 pytestmark = requires_db
 
@@ -289,3 +289,53 @@ async def test_downloaded_lookup_lists_folders_per_post(
     # Assert
     assert response.json() == {"foldersByPost": {"p1": ["A", "B"]}}
     assert other_platform.json() == {"foldersByPost": {}}
+
+
+async def test_move_items_merges_duplicates_and_creates_target_folder(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    # Arrange: Bali holds p1 and p2, Lombok already holds p1
+    await login(client)
+    resolver = FakeResolver({"p1": [PHOTO_URL_BLUE], "p2": [PHOTO_URL_RED]})
+    runner = JobRunner(
+        session_factory, {"instagram": resolver}, app.state.storage, {}, 10_000_000, no_sleep
+    )
+    for folder_name, post_ids in (("Bali", ["p1", "p2"]), ("Lombok", ["p1"])):
+        job = (
+            await client.post(
+                "/api/downloads",
+                json={
+                    "folderName": folder_name,
+                    "platform": "instagram",
+                    "username": "someone",
+                    "postIds": post_ids,
+                },
+            )
+        ).json()
+        await runner.run(job["id"])
+    folders = {f["name"]: f["id"] for f in (await client.get("/api/folders")).json()}
+    bali_items = (await client.get(f"/api/folders/{folders['Bali']}/items?type=photo")).json()
+    ids = [item["id"] for item in bali_items]
+
+    # Act
+    merged = (
+        await client.post("/api/items/move", json={"itemIds": ids, "folderName": "lombok"})
+    ).json()
+    lombok_items = (await client.get(f"/api/folders/{folders['Lombok']}/items?type=photo")).json()
+    bali_after = (await client.get(f"/api/folders/{folders['Bali']}/items?type=photo")).json()
+    created = (
+        await client.post(
+            "/api/items/move",
+            json={"itemIds": [lombok_items[0]["id"]], "folderName": "  Folder   Baru "},
+        )
+    ).json()
+    unauthorized = await httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ).post("/api/items/move", json={"itemIds": ids, "folderName": "x"})
+
+    # Assert
+    assert (merged["folderName"], merged["moved"], merged["merged"]) == ("Lombok", 1, 1)
+    assert len(lombok_items) == 2
+    assert bali_after == []
+    assert (created["folderName"], created["moved"]) == ("Folder Baru", 1)
+    assert unauthorized.status_code == 401

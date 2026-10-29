@@ -9,8 +9,11 @@ import {
   fetchFolder,
   fetchFolderItems,
   formatBytes,
+  MoveResult,
 } from '../utils/api';
 import MediaViewer from './MediaViewer';
+import MoveForm from './MoveForm';
+import SelectToggle from './SelectToggle';
 import TabBar from './TabBar';
 import UploadDialog from './UploadDialog';
 import { ConfirmDelete, Panel, focusRing, primaryButton, secondaryButton } from './ui';
@@ -28,9 +31,7 @@ const parseSource = (value: string | null): MediaSource =>
   value === 'story' || value === 'upload' ? value : 'post';
 
 type ItemsState =
-  | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; items: MediaItem[] };
+  { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; items: MediaItem[] };
 
 const errorMessage = (caught: unknown, fallback: string) =>
   caught instanceof ApiError ? caught.message : fallback;
@@ -46,6 +47,8 @@ const FolderPage: React.FC = () => {
   const [items, setItems] = useState<ItemsState>({ status: 'loading' });
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [moveNotice, setMoveNotice] = useState<MoveResult | null>(null);
 
   const loadFolder = useCallback(() => {
     fetchFolder(folderId)
@@ -71,6 +74,33 @@ const FolderPage: React.FC = () => {
 
   useEffect(loadFolder, [loadFolder]);
   useEffect(loadItems, [loadItems]);
+  // A selection only makes sense for the files on screen.
+  useEffect(() => setSelected(new Set()), [folderId, activeTab, activeSource]);
+
+  const toggleSelected = (itemId: number) =>
+    setSelected((previous) => {
+      const next = new Set(previous);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+      return next;
+    });
+
+  const handleMoved = (result: MoveResult, movedIds: number[]) => {
+    setMoveNotice(result);
+    setSelected(new Set());
+    if (items.status === 'ready') {
+      const gone = new Set(movedIds);
+      const remaining = items.items.filter((candidate) => !gone.has(candidate.id));
+      setItems({ status: 'ready', items: remaining });
+      setViewerIndex((index) =>
+        remaining.length === 0 || index === null ? null : Math.min(index, remaining.length - 1),
+      );
+    }
+    loadFolder();
+  };
 
   const updateParams = (source: MediaSource, type: MediaType) => {
     setViewerIndex(null);
@@ -104,6 +134,7 @@ const FolderPage: React.FC = () => {
   }
 
   const readyItems = items.status === 'ready' ? items.items : [];
+  const allSelected = readyItems.length > 0 && readyItems.every((item) => selected.has(item.id));
 
   return (
     <div>
@@ -164,7 +195,46 @@ const FolderPage: React.FC = () => {
         />
       </div>
 
-      <div id="folder-tabpanel" role="tabpanel" aria-labelledby={`source-${activeSource} type-${activeTab}`}>
+      {moveNotice && (
+        <p
+          role="status"
+          className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-white p-4 text-sm text-gray-800 shadow-md"
+        >
+          <span>
+            {moveNotice.moved + moveNotice.merged} file dipindah ke{' '}
+            <Link to={`/library/${moveNotice.folderId}`} className={`font-semibold underline ${focusRing}`}>
+              {moveNotice.folderName}
+            </Link>
+            {moveNotice.merged > 0 ? `, ${moveNotice.merged} sudah ada di sana jadi tidak dobel` : ''}.
+          </span>
+          <button
+            type="button"
+            className="ml-auto underline text-gray-700"
+            onClick={() => setMoveNotice(null)}
+          >
+            Tutup
+          </button>
+        </p>
+      )}
+
+      {readyItems.length > 0 && (
+        <div className="mb-3">
+          <button
+            type="button"
+            className={secondaryButton}
+            onClick={() => setSelected(allSelected ? new Set() : new Set(readyItems.map((item) => item.id)))}
+          >
+            {allSelected ? 'Batal pilih semua' : `Pilih semua ${TYPE_LABELS[activeTab].toLowerCase()}`}
+          </button>
+        </div>
+      )}
+
+      <div
+        id="folder-tabpanel"
+        role="tabpanel"
+        aria-labelledby={`source-${activeSource} type-${activeTab}`}
+        className={selected.size > 0 ? 'pb-48 md:pb-28' : ''}
+      >
         {items.status === 'loading' && (
           <Panel role="status">
             <p>Memuat file...</p>
@@ -181,15 +251,18 @@ const FolderPage: React.FC = () => {
         {items.status === 'ready' && readyItems.length === 0 && (
           <Panel>
             <p>
-              Belum ada {TYPE_LABELS[activeTab].toLowerCase()} dari {SOURCE_LABELS[activeSource].toLowerCase()} di
-              folder ini.
+              Belum ada {TYPE_LABELS[activeTab].toLowerCase()} dari{' '}
+              {SOURCE_LABELS[activeSource].toLowerCase()} di folder ini.
             </p>
           </Panel>
         )}
         {readyItems.length > 0 && (
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             {readyItems.map((item, index) => (
-              <li key={item.id}>
+              <li
+                key={item.id}
+                className={`relative rounded-md ${selected.has(item.id) ? 'ring-4 ring-gray-900' : ''}`}
+              >
                 <button
                   type="button"
                   onClick={() => setViewerIndex(index)}
@@ -197,7 +270,12 @@ const FolderPage: React.FC = () => {
                   className={`relative block aspect-square w-full overflow-hidden rounded-md bg-gray-200 ${focusRing}`}
                 >
                   {item.thumbnailUrl ? (
-                    <img src={item.thumbnailUrl} alt="" loading="lazy" className="h-full w-full object-cover" />
+                    <img
+                      src={item.thumbnailUrl}
+                      alt=""
+                      loading="lazy"
+                      className="h-full w-full object-cover"
+                    />
                   ) : (
                     <span className="flex h-full items-center justify-center p-2 text-center text-xs text-gray-700">
                       Tidak ada preview
@@ -209,11 +287,33 @@ const FolderPage: React.FC = () => {
                     </span>
                   )}
                 </button>
+                <SelectToggle
+                  isSelected={selected.has(item.id)}
+                  label={`Pilih ${item.mediaType === 'video' ? 'video' : 'foto'} ${index + 1}`}
+                  onToggle={() => toggleSelected(item.id)}
+                />
               </li>
             ))}
           </ul>
         )}
       </div>
+
+      {selected.size > 0 && folder && (
+        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-300 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
+          <div className="container mx-auto flex flex-col gap-2 px-4 py-3 md:flex-row md:items-end">
+            <p className="text-sm font-semibold text-gray-900 md:pb-3">{selected.size} dipilih</p>
+            <div className="min-w-0 flex-1">
+              <MoveForm
+                itemIds={Array.from(selected)}
+                currentFolderId={folder.id}
+                inputId="move-folder-bar"
+                onMoved={(result) => handleMoved(result, Array.from(selected))}
+                onCancel={() => setSelected(new Set())}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {isUploadOpen && folder && (
         <UploadDialog
@@ -236,6 +336,8 @@ const FolderPage: React.FC = () => {
           onPrevious={viewerIndex > 0 ? () => setViewerIndex(viewerIndex - 1) : undefined}
           onNext={viewerIndex < readyItems.length - 1 ? () => setViewerIndex(viewerIndex + 1) : undefined}
           onDelete={handleDeleteItem}
+          currentFolderId={folderId}
+          onMoved={(result, item) => handleMoved(result, [item.id])}
         />
       )}
     </div>

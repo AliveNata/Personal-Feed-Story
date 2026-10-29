@@ -11,7 +11,8 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { MediaItem } from '../types';
-import { formatBytes } from '../utils/api';
+import { MoveResult, formatBytes } from '../utils/api';
+import MoveForm from './MoveForm';
 import { ConfirmDelete, focusRing, secondaryButton } from './ui';
 import ZoomableMedia from './ZoomableMedia';
 import { MAX_SCALE, useZoom } from './zoom';
@@ -26,6 +27,8 @@ interface MediaViewerProps {
   onPrevious?: () => void;
   onNext?: () => void;
   onDelete: (item: MediaItem) => Promise<void>;
+  currentFolderId: number;
+  onMoved: (result: MoveResult, item: MediaItem) => void;
 }
 
 const SOURCE_LABELS: Record<MediaItem['platform'], string> = {
@@ -44,6 +47,8 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
   onPrevious,
   onNext,
   onDelete,
+  currentFolderId,
+  onMoved,
 }) => {
   const dialogRef = useRef<HTMLDialogElement>(null);
   // Chrome refuses full screen on a <dialog> itself, so the content box inside goes full screen.
@@ -51,6 +56,8 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
   const { zoom, setZoom, reset, zoomAt } = useZoom();
   const [isFullscreen, setIsFullscreen] = useState(false);
   const isVideo = item.mediaType === 'video';
+  const [isMoving, setIsMoving] = useState(false);
+  useEffect(() => setIsMoving(false), [item.id]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
 
@@ -250,6 +257,9 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
                 Buka post asli
               </a>
             )}
+            <button type="button" className={secondaryButton} onClick={() => setIsMoving((open) => !open)}>
+              Pindahkan
+            </button>
             <ConfirmDelete
               key={item.id}
               label="Hapus file"
@@ -257,6 +267,17 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
               onConfirm={() => onDelete(item)}
             />
           </div>
+          {isMoving && (
+            <div className="mt-3">
+              <MoveForm
+                itemIds={[item.id]}
+                currentFolderId={currentFolderId}
+                inputId="move-folder-viewer"
+                onMoved={(result) => onMoved(result, item)}
+                onCancel={() => setIsMoving(false)}
+              />
+            </div>
+          )}
         </div>
       </div>
     </dialog>

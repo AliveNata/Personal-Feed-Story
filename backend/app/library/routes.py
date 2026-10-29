@@ -220,6 +220,35 @@ async def _get_item(db: AsyncSession, item_id: int) -> MediaItem:
     return item
 
 
+class MoveRequest(CamelModel):
+    item_ids: list[int] = Field(min_length=1, max_length=500)
+    folder_name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("folder_name")
+    @classmethod
+    def folder_name_not_blank(cls, value: str) -> str:
+        clean = service.normalize_folder_name(value)
+        if not clean:
+            raise ValueError("Nama folder tidak boleh kosong")
+        return clean
+
+
+class MoveResponse(CamelModel):
+    folder_id: int
+    folder_name: str
+    moved: int
+    merged: int
+
+
+@router.post("/items/move", response_model=MoveResponse)
+async def move_items(body: MoveRequest, db: DbSession) -> MoveResponse:
+    target = await service.get_or_create_folder(db, body.folder_name)
+    result = await service.move_items(db, body.item_ids, target)
+    return MoveResponse(
+        folder_id=target.id, folder_name=target.name, moved=result.moved, merged=result.merged
+    )
+
+
 @router.delete("/items/{item_id}", status_code=204)
 async def delete_item(item_id: int, db: DbSession, storage: Storage) -> None:
     await service.delete_item(db, storage, await _get_item(db, item_id))

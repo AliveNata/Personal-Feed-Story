@@ -250,6 +250,39 @@ async def delete_folder(db: AsyncSession, storage: LibraryStorage, folder: Folde
     logger.info("deleted folder %s, %d files removed from disk", folder.id, removed)
 
 
+@dataclass(frozen=True)
+class MoveResult:
+    moved: int
+    # Already in the target folder (same source item): the copy here is dropped instead.
+    merged: int
+
+
+async def move_items(db: AsyncSession, item_ids: list[int], target: Folder) -> MoveResult:
+    """Move items to another folder. Files stay where they are, only the folder link changes."""
+    items = list((await db.scalars(select(MediaItem).where(MediaItem.id.in_(item_ids)))).all())
+    moved = merged = 0
+    for item in items:
+        if item.folder_id == target.id:
+            continue
+        duplicate = await db.scalar(
+            select(MediaItem.id).where(
+                MediaItem.folder_id == target.id,
+                MediaItem.platform == item.platform,
+                MediaItem.source_post_id == item.source_post_id,
+                MediaItem.item_index == item.item_index,
+            )
+        )
+        if duplicate is not None:
+            # The target row points at the same blob, so no file becomes orphaned.
+            await db.delete(item)
+            merged += 1
+        else:
+            item.folder_id = target.id
+            moved += 1
+    await db.commit()
+    return MoveResult(moved=moved, merged=merged)
+
+
 async def delete_item(db: AsyncSession, storage: LibraryStorage, item: MediaItem) -> None:
     sha = item.blob_sha256
     await db.delete(item)
