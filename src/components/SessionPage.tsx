@@ -164,6 +164,13 @@ const SessionCard: React.FC<{
           </div>
         )}
       </dl>
+      {status.replaceReason && (
+        <p role="alert" className="mt-3 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+          <span className="font-semibold">Cookie ini perlu diganti.</span> {status.replaceReason}
+          {status.problemSince ? ` (sejak ${formatRelativeTime(status.problemSince)})` : ''}. Login ulang di
+          browser, lalu tempel cookie baru di bawah.
+        </p>
+      )}
       {status.waitSeconds > 0 && (
         <p
           role="status"

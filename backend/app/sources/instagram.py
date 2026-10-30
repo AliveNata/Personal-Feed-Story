@@ -434,7 +434,16 @@ class InstagramSource:
 
     def _guarded(self, func: Callable[[], T]) -> T:
         with self._lock, self._translate_errors():
-            return func()
+            result = func()
+        if self._budget is not None and self._loader.context.is_logged_in:
+            # A logged in request just worked, so the session is fine again.
+            self._budget.clear_session_problem(PLATFORM)
+        return result
+
+    def _session_rejected(self, reason: str) -> None:
+        if self._budget is not None and self._loader.context.is_logged_in:
+            logger.warning("instagram session rejected: %s", reason)
+            self._budget.mark_session_problem(PLATFORM, reason)
 
     @contextmanager
     def _translate_errors(self) -> Iterator[None]:
@@ -457,7 +466,11 @@ class InstagramSource:
             raise UserNotFoundError(
                 "Instagram membalas 404 saat mengambil data. Cek log backend untuk query mana"
             ) from exc
-        except (PrivateProfileNotFollowedException, LoginRequiredException) as exc:
+        except PrivateProfileNotFollowedException as exc:
+            raise PrivateAccountError("Akun ini private dan tidak di-follow akun session") from exc
+        except LoginRequiredException as exc:
+            # Logged in yet told to log in: Instagram dropped the session.
+            self._session_rejected("Instagram minta login ulang, session sudah tidak berlaku")
             raise PrivateAccountError("Akun ini private atau butuh login Instagram") from exc
         except AbortDownloadException as exc:
             # Raised for 400 "feedback_required" and similar: Instagram is limiting this account.
@@ -473,6 +486,7 @@ class InstagramSource:
                 retry_after=seconds,
             ) from exc
         except QueryReturnedForbiddenException as exc:
+            self._session_rejected("Instagram menolak session (403)")
             raise UpstreamError("Instagram menolak request (403), cek session") from exc
         except ConnectionException as exc:
             logger.error("instagram request failed: %s", exc)
@@ -483,6 +497,10 @@ class InstagramSource:
                     else COOLDOWN_AFTER_429_SECONDS
                 )
                 raise RateLimitedError(wait_message(seconds), retry_after=seconds) from exc
+            if "401" in str(exc):
+                self._session_rejected(
+                    "Instagram membalas 401, session sudah logout atau kedaluwarsa"
+                )
             raise UpstreamError("Gagal mengambil data Instagram") from exc
 
     # Any, like instaloader's own untyped returns: its Post class does not match our Protocols.

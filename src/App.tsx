@@ -11,6 +11,7 @@ import Header from './components/Header';
 import LibraryPage from './components/LibraryPage';
 import Login from './components/Login';
 import RequireAuth from './components/RequireAuth';
+import SessionAlert from './components/SessionAlert';
 import SessionPage from './components/SessionPage';
 import { Platform, Post, RateInfo, StoriesStatus } from './types';
 import { ApiError, fetchFeed } from './utils/api';
@@ -138,6 +139,7 @@ function App() {
         <Router>
           <div className="min-h-screen bg-gradient-to-br from-purple-100 to-pink-100">
             <Header platform={platform} />
+            <SessionAlert />
             <main className="container mx-auto px-4 py-8">
               <Routes>
                 <Route path="/login" element={<Login />} />

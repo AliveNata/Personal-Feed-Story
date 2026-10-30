@@ -172,3 +172,23 @@ async def test_cookie_without_session_is_rejected(
     # Assert
     assert response.status_code == 422
     assert "sessionid" in response.json()["detail"]
+
+
+@requires_db
+async def test_status_asks_to_replace_after_repeated_throttles_until_new_cookie(
+    client: tuple[httpx.AsyncClient, dict[str, Any]],
+) -> None:
+    # Arrange
+    http, parts = client
+    parts["budget"].throttled("instagram", 900)
+    parts["budget"].throttled("instagram", 900)
+
+    # Act
+    before = {s["platform"]: s for s in (await http.get("/api/platform-sessions")).json()}
+    await http.put("/api/platform-sessions/instagram", json={"cookie": IG_COOKIE})
+    after = {s["platform"]: s for s in (await http.get("/api/platform-sessions")).json()}
+
+    # Assert
+    assert "2 kali" in before["instagram"]["replaceReason"]
+    assert before["tiktok"]["replaceReason"] is None
+    assert after["instagram"]["replaceReason"] is None

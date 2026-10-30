@@ -11,7 +11,7 @@ from instaloader.exceptions import (
     ProfileNotExistsException,
 )
 
-from app.errors import RateLimitedError, UserNotFoundError
+from app.errors import RateLimitedError, UpstreamError, UserNotFoundError
 from app.platform_sessions import InvalidSessionError
 from app.ratelimit import RateBudget
 from app.sources.instagram import (
@@ -383,3 +383,23 @@ def test_pasted_instagram_cookie_needs_a_sessionid() -> None:
     # Arrange / Act / Assert
     with pytest.raises(InvalidSessionError):
         validate_instagram_cookie("csrftoken=abc; mid=xyz")
+
+
+def test_401_marks_the_session_for_replacement_and_a_success_clears_it() -> None:
+    # Arrange
+    budget = RateBudget(fakeredis.FakeRedis(), {"instagram": (100, 900)})
+    loader = SimpleNamespace(context=SimpleNamespace(is_logged_in=True))
+    source = InstagramSource(loader, True, budget=budget)  # type: ignore[arg-type]
+
+    def logged_out() -> None:
+        raise ConnectionException("JSON Query to graphql/query: 401 Unauthorized")
+
+    # Act
+    with pytest.raises(UpstreamError):
+        source._guarded(logged_out)
+    flagged = budget.session_problem("instagram")
+    source._guarded(lambda: None)
+
+    # Assert
+    assert flagged is not None and "401" in str(flagged["reason"])
+    assert budget.session_problem("instagram") is None

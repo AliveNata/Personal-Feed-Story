@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -42,6 +42,9 @@ class SessionStatus(CamelModel):
     updated_at: datetime | None
     # Seconds the app still holds requests to this platform after a "slow down".
     wait_seconds: int
+    # Set when the cookie should be replaced: rejected, or limited again and again.
+    replace_reason: str | None = None
+    problem_since: datetime | None = None
 
 
 class SaveSessionRequest(CamelModel):
@@ -56,7 +59,28 @@ def _env_source(platform: Platform) -> Literal["env", "none"]:
     return "env" if settings.ig_username and has_file else "none"
 
 
+# From this many "slow down" answers in a few hours, waiting is not working: new cookie.
+REPLACE_AFTER_STRIKES = 2
+
+
+async def _replace_hint(sources: Sources, platform: Platform) -> tuple[str | None, datetime | None]:
+    problem = await asyncio.to_thread(sources.budget.session_problem, platform)
+    if problem:
+        since = datetime.fromtimestamp(float(problem["since"]), tz=UTC)  # type: ignore[arg-type]
+        return str(problem["reason"]), since
+    strikes = await asyncio.to_thread(sources.budget.strikes, platform)
+    if strikes >= REPLACE_AFTER_STRIKES:
+        return f"Dibatasi {strikes} kali dalam beberapa jam terakhir", None
+    return None, None
+
+
 async def _status(sources: Sources, platform: Platform) -> SessionStatus:
+    status = await _base_status(sources, platform)
+    reason, since = await _replace_hint(sources, platform)
+    return status.model_copy(update={"replace_reason": reason, "problem_since": since})
+
+
+async def _base_status(sources: Sources, platform: Platform) -> SessionStatus:
     assert sources.sessions is not None
     stored = await sources.sessions.get(platform)
     wait = (await asyncio.to_thread(sources.budget.status, platform)).wait_seconds
@@ -115,6 +139,7 @@ async def save_session(
     if verified:
         # A session the platform just accepted is not the one it was throttling.
         await asyncio.to_thread(sources.budget.clear_throttle, platform)
+        await asyncio.to_thread(sources.budget.clear_session_problem, platform)
     logger.info("%s session saved from the web for %s (verified=%s)", platform, account, verified)
     return await _status(sources, platform)
 

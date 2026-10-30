@@ -4,6 +4,7 @@ The limits are our own conservative guesses, not published platform numbers. The
 stop and tell the user to wait before the platform starts answering 429 or flags the account.
 """
 
+import json
 import logging
 import math
 import time
@@ -23,6 +24,8 @@ NEAR_LIMIT_RATIO = 0.8
 # throttle within STRIKE_MEMORY_SECONDS doubles the wait, up to MAX_THROTTLE_SECONDS.
 STRIKE_MEMORY_SECONDS = 6 * 60 * 60
 MAX_THROTTLE_SECONDS = 4 * 60 * 60
+# A dead session stays flagged until a request works again or a new cookie is saved.
+SESSION_PROBLEM_TTL = 7 * 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -135,6 +138,37 @@ class RateBudget:
         logger.warning("%s throttled, strike %d", platform, strikes)
         self.cooldown(platform, seconds)
         return seconds
+
+    def strikes(self, platform: str) -> int:
+        try:
+            value = self._redis.get(f"ratebudget:{platform}:strikes")
+        except RedisError as exc:
+            logger.warning("rate budget strike read failed for %s: %s", platform, exc)
+            return 0
+        return int(value) if value else 0  # type: ignore[arg-type]
+
+    def mark_session_problem(self, platform: str, reason: str) -> None:
+        """The platform rejected the session itself: the cookie needs replacing."""
+        payload = json.dumps({"reason": reason, "since": time.time()})
+        try:
+            # nx: keep the first time it broke, not the latest retry.
+            self._redis.set(f"sessionproblem:{platform}", payload, ex=SESSION_PROBLEM_TTL, nx=True)
+        except RedisError as exc:
+            logger.warning("could not store session problem for %s: %s", platform, exc)
+
+    def session_problem(self, platform: str) -> dict[str, object] | None:
+        try:
+            raw = self._redis.get(f"sessionproblem:{platform}")
+        except RedisError as exc:
+            logger.warning("could not read session problem for %s: %s", platform, exc)
+            return None
+        return json.loads(raw) if raw else None  # type: ignore[arg-type]
+
+    def clear_session_problem(self, platform: str) -> None:
+        try:
+            self._redis.delete(f"sessionproblem:{platform}")
+        except RedisError as exc:
+            logger.warning("could not clear session problem for %s: %s", platform, exc)
 
     def clear_throttle(self, platform: str) -> None:
         """Forget cooldown and strikes, for a fresh session the platform has not limited yet."""

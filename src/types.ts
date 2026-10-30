@@ -172,4 +172,7 @@ export interface PlatformSessionStatus {
   verified: boolean;
   updatedAt: string | null;
   waitSeconds: number;
+  // Set when the cookie should be replaced: rejected, or limited again and again.
+  replaceReason: string | null;
+  problemSince: string | null;
 }
