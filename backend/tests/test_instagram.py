@@ -11,7 +11,7 @@ from instaloader.exceptions import (
     ProfileNotExistsException,
 )
 
-from app.errors import RateLimitedError
+from app.errors import RateLimitedError, UserNotFoundError
 from app.platform_sessions import InvalidSessionError
 from app.ratelimit import RateBudget
 from app.sources.instagram import (
@@ -334,14 +334,17 @@ def test_profile_still_missing_when_api_has_no_user(monkeypatch: pytest.MonkeyPa
         source._profile("ghost")
 
 
-def test_profile_api_429_is_a_rate_limit_not_a_missing_account(
+def test_profile_api_429_pauses_only_the_fallback_not_instagram(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Arrange
     def page_without_data(context: object, username: str) -> None:
         raise ProfileNotExistsException("nope")
 
+    calls: list[str] = []
+
     def limited(path: str, params: dict[str, str]) -> None:
+        calls.append(params["username"])
         raise ConnectionException(f"JSON Query to {path}: 429 Too Many Requests")
 
     monkeypatch.setattr(instaloader.Profile, "from_username", page_without_data)
@@ -350,9 +353,12 @@ def test_profile_api_429_is_a_rate_limit_not_a_missing_account(
     source = InstagramSource(SimpleNamespace(context=context), True, budget=budget)  # type: ignore[arg-type]
 
     # Act / Assert
-    with pytest.raises(RateLimitedError):
-        source._guarded(lambda: source._profile("linuarinuja_new"))
-    assert budget.status("instagram").wait_seconds > 0
+    with pytest.raises(UserNotFoundError, match="ejaan"):
+        source._guarded(lambda: source._profile("hasna_saanti"))
+    with pytest.raises(UserNotFoundError):
+        source._guarded(lambda: source._profile("another_typo"))
+    assert calls == ["hasna_saanti"]  # paused: the second miss does not hit the API
+    assert budget.status("instagram").wait_seconds == 0
 
 
 def test_401_please_wait_is_a_rate_limit_with_cooldown() -> None:

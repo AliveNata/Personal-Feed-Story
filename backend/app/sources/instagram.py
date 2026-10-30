@@ -252,6 +252,18 @@ def _is_throttle(exc: Exception) -> bool:
     return any(hint in text for hint in THROTTLE_HINTS)
 
 
+# The profile API fallback is limited much tighter than the rest of Instagram.
+PROFILE_API_PAUSE_SECONDS = 15 * 60
+
+
+def _profile_unreadable(username: str) -> UserNotFoundError:
+    return UserNotFoundError(
+        f"Profil @{username} tidak kebaca dari Instagram. Cek lagi ejaan username-nya. "
+        "Kalau sudah benar, jalur cadangan profil Instagram lagi dibatasi, coba akun ini lagi "
+        "sekitar 15 menit. Akun lain tetap bisa dibuka"
+    )
+
+
 def _has_more(iterator: Any) -> bool:
     """Whether a NodeIterator has items left, without pulling one (that would cost a query).
 
@@ -386,6 +398,7 @@ class InstagramSource:
         # The .env / session file loader, used again when the web session is removed.
         self._default_loader = loader
         self._session_sync: SessionSync | None = None
+        self._profile_api_paused_until = 0.0
         self._include_stories = include_stories
         self._page_size = page_size
         self._budget = budget
@@ -483,6 +496,8 @@ class InstagramSource:
         try:
             return instaloader.Profile.from_username(context, username)
         except ProfileNotExistsException as page_error:
+            if time.monotonic() < self._profile_api_paused_until:
+                raise _profile_unreadable(username) from page_error
             logger.info(
                 "instagram profile page had no data for %s, trying the profile API", username
             )
@@ -493,11 +508,11 @@ class InstagramSource:
             except (ConnectionException, AbortDownloadException) as api_error:
                 logger.warning("instagram profile API failed for %s: %s", username, api_error)
                 if isinstance(api_error, TooManyRequestsException) or _is_throttle(api_error):
-                    # A limited session is also why the page came back empty, so this is a
-                    # rate limit, not a missing account.
-                    if self._budget is not None:
-                        self._budget.throttled(PLATFORM, COOLDOWN_AFTER_429_SECONDS)
-                    raise TooManyRequestsException(str(api_error)) from api_error
+                    # Only this fallback endpoint is limited, the session itself still works
+                    # (feeds and media load fine). A typo in the username also lands here, so
+                    # pausing all of Instagram would punish the wrong thing: pause this route.
+                    self._profile_api_paused_until = time.monotonic() + PROFILE_API_PAUSE_SECONDS
+                    raise _profile_unreadable(username) from api_error
                 raise page_error from api_error
             user = (data.get("data") or {}).get("user")
             if not isinstance(user, dict) or not user.get("id"):
