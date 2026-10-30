@@ -2,12 +2,14 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+import fakeredis
 import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth import hash_password, verify_password
 from app.db import User
+from app.library.archive import ImportStore
 from app.library.jobs import JobRunner
 from app.main import app
 from tests.conftest import requires_db
@@ -405,3 +407,39 @@ async def test_activity_records_download_move_upload_and_deletes(
     assert (move["folderExists"], move["targetFolderExists"]) == (False, True)
     assert len(page["events"]) == 2 and page["nextBefore"] is not None
     assert [e["action"] for e in for_salah["events"]] == ["move"]
+
+
+async def test_archive_upload_queues_an_import_and_reports_its_state(
+    client: httpx.AsyncClient,
+) -> None:
+    # Arrange
+    await login(client)
+    app.state.import_store = ImportStore(fakeredis.FakeRedis())
+    folder_id = (await client.post("/api/folders/0/archives")).status_code  # 422: no file
+    bali = (
+        await client.post(
+            "/api/downloads",
+            json={
+                "folderName": "Bali",
+                "platform": "instagram",
+                "username": "someone",
+                "postIds": ["p1"],
+            },
+        )
+    ).json()["folderId"]
+
+    # Act
+    queued = await client.post(
+        f"/api/folders/{bali}/archives", files={"file": ("foto.zip", b"PK fake", "application/zip")}
+    )
+    wrong_type = await client.post(
+        f"/api/folders/{bali}/archives", files={"file": ("foto.7z", b"x", "application/x-7z")}
+    )
+    state = await client.get(f"/api/archive-imports/{queued.json()['importId']}")
+
+    # Assert
+    assert folder_id == 422
+    assert queued.status_code == 202
+    assert app.state.queue.jobs[-1] == queued.json()["importId"]
+    assert wrong_type.status_code == 415
+    assert (state.json()["status"], state.json()["filename"]) == ("queued", "foto.zip")

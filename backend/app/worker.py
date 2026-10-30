@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, ClassVar
 
 import httpx
@@ -15,6 +16,7 @@ from app.config import get_settings
 from app.db import build_engine, build_session_factory
 from app.factory import build_sources, build_storage
 from app.favorites import service as favorites
+from app.library.archive import ImportStore, run_import
 from app.library.jobs import JobRunner
 from app.library.progress import RedisProgress
 from app.library.types import MediaResolver
@@ -39,6 +41,8 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["sources"] = sources
     ctx["session_factory"] = build_session_factory(engine)
     ctx["media_cache"] = MediaFileCache(settings.library_dir / "mediacache")
+    ctx["import_store"] = ImportStore(redis)
+    ctx["storage"] = build_storage(settings)
     ctx["delays"] = {
         "instagram": settings.instagram_delay_seconds,
         "tiktok": settings.tiktok_delay_seconds,
@@ -97,9 +101,28 @@ async def purge_caches(ctx: dict[str, Any]) -> None:
     logger.info("cache purge: %d expired pages, %d old media files", pages, files)
 
 
+async def import_archive(ctx: dict[str, Any], import_id: str) -> None:
+    states: ImportStore = ctx["import_store"]
+    raw = states.load(import_id)
+    if raw is None:
+        logger.warning("archive import %s has no state, skipped", import_id)
+        return
+    settings = get_settings()
+    await run_import(
+        import_id,
+        Path(raw["path"]),
+        raw["params"],
+        ctx["storage"],
+        ctx["session_factory"],
+        states,
+        settings.max_archive_unpacked_bytes,
+    )
+
+
 class WorkerSettings:
     functions: ClassVar = [
         download_job,
+        import_archive,
         # No stored result, so "Cek sekarang" can reuse the fixed job id right after a run.
         func(check_favorites, keep_result=0),
     ]

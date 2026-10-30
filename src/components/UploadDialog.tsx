@@ -1,7 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Upload, X } from 'lucide-react';
 import { MediaType } from '../types';
-import { ApiError, formatBytes, uploadFile } from '../utils/api';
+import {
+  ApiError,
+  ArchiveImport,
+  fetchArchiveImport,
+  formatBytes,
+  uploadArchive,
+  uploadFile,
+} from '../utils/api';
 import { focusRing, primaryButton, secondaryButton } from './ui';
 
 interface UploadDialogProps {
@@ -11,12 +18,13 @@ interface UploadDialogProps {
   onUploaded: () => void;
 }
 
-type EntryStatus = 'pending' | 'uploading' | 'saved' | 'skipped' | 'failed' | 'unsupported';
+type EntryStatus = 'pending' | 'uploading' | 'processing' | 'saved' | 'skipped' | 'failed' | 'unsupported';
+type EntryKind = MediaType | 'archive';
 
 interface Entry {
   key: string;
   file: File;
-  mediaType: MediaType | null;
+  mediaType: EntryKind | null;
   status: EntryStatus;
   progress: number;
   message?: string;
@@ -26,22 +34,46 @@ interface Entry {
 // MIME type for formats like .heic.
 const PHOTO_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'heic', 'avif'];
 const VIDEO_EXTENSIONS = ['mp4', 'm4v', 'mov', 'webm'];
-const ACCEPT = [...PHOTO_EXTENSIONS, ...VIDEO_EXTENSIONS].map((ext) => `.${ext}`).join(',');
+// Unpacked on the server: photos and videos inside, at any depth, go into this folder.
+const ARCHIVE_EXTENSIONS = ['zip', 'rar'];
+const ACCEPT = [...PHOTO_EXTENSIONS, ...VIDEO_EXTENSIONS, ...ARCHIVE_EXTENSIONS]
+  .map((ext) => `.${ext}`)
+  .join(',');
+const ARCHIVE_POLL_MS = 1500;
+const KIND_LABELS: Record<EntryKind, string> = { photo: 'Foto', video: 'Video', archive: 'Arsip' };
 
-const detectType = (file: File): MediaType | null => {
+const detectType = (file: File): EntryKind | null => {
   const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
   if (PHOTO_EXTENSIONS.includes(extension)) return 'photo';
   if (VIDEO_EXTENSIONS.includes(extension)) return 'video';
+  if (ARCHIVE_EXTENSIONS.includes(extension)) return 'archive';
   return null;
+};
+
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const archiveProgress = (state: ArchiveImport): string => {
+  if (state.status === 'queued') return 'Menunggu antrian worker...';
+  if (state.status === 'unpacking') return 'Membuka arsip...';
+  return `Memasukkan file ${state.done}/${state.total}`;
+};
+
+const archiveSummary = (state: ArchiveImport): string => {
+  const parts = [`${state.saved} file masuk`];
+  if (state.skipped) parts.push(`${state.skipped} sudah ada`);
+  if (state.ignored) parts.push(`${state.ignored} bukan foto/video dilewati`);
+  if (state.failed) parts.push(`${state.failed} gagal`);
+  return parts.join(', ');
 };
 
 const STATUS_TEXT: Record<EntryStatus, string> = {
   pending: 'Siap',
   uploading: 'Mengupload',
+  processing: 'Memproses arsip',
   saved: 'Tersimpan',
   skipped: 'Sudah ada, dilewati',
   failed: 'Gagal',
-  unsupported: 'Bukan foto atau video',
+  unsupported: 'Bukan foto, video, zip, atau rar',
 };
 
 const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClose, onUploaded }) => {
@@ -76,7 +108,27 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
 
   const pending = entries.filter((entry) => entry.status === 'pending');
   const photoCount = pending.filter((entry) => entry.mediaType === 'photo').length;
-  const videoCount = pending.length - photoCount;
+  const archiveCount = pending.filter((entry) => entry.mediaType === 'archive').length;
+  const videoCount = pending.length - photoCount - archiveCount;
+
+  const importArchive = async (entry: Entry): Promise<boolean> => {
+    let state = await uploadArchive(folderId, entry.file, (progress) => update(entry.key, { progress }));
+    update(entry.key, { status: 'processing', progress: 1, message: archiveProgress(state) });
+    while (state.status !== 'done' && state.status !== 'failed') {
+      await sleep(ARCHIVE_POLL_MS);
+      state = await fetchArchiveImport(state.importId);
+      update(entry.key, { message: archiveProgress(state) });
+    }
+    if (state.status === 'failed') {
+      update(entry.key, { status: 'failed', message: state.error ?? 'Arsip gagal diproses' });
+      return false;
+    }
+    update(entry.key, {
+      status: state.saved ? 'saved' : 'skipped',
+      message: archiveSummary(state),
+    });
+    return state.saved > 0;
+  };
 
   const startUpload = async () => {
     setIsUploading(true);
@@ -85,6 +137,10 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
     for (const entry of pending) {
       update(entry.key, { status: 'uploading', progress: 0 });
       try {
+        if (entry.mediaType === 'archive') {
+          savedAny = (await importArchive(entry)) || savedAny;
+          continue;
+        }
         const result = await uploadFile(folderId, entry.file, (progress) => update(entry.key, { progress }));
         update(entry.key, { status: result.status, progress: 1 });
         savedAny = savedAny || result.status === 'saved';
@@ -114,6 +170,7 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
       onClose={onClose}
       onCancel={(event) => {
         // Escape during an upload would hide progress while files are still sending.
+        // An archive keeps unpacking in the worker even if the dialog closes.
         if (isUploading) event.preventDefault();
       }}
       aria-labelledby="upload-title"
@@ -147,7 +204,7 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
           }`}
         >
           <Upload className="h-8 w-8 text-gray-700" aria-hidden="true" />
-          <p className="text-gray-800">Tarik foto atau video ke sini</p>
+          <p className="text-gray-800">Tarik foto, video, atau zip/rar ke sini</p>
           <p className="text-sm text-gray-700">atau</p>
           <button
             type="button"
@@ -170,7 +227,8 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
             }}
           />
           <p className="text-xs text-gray-700">
-            Foto: {PHOTO_EXTENSIONS.join(', ')}. Video: {VIDEO_EXTENSIONS.join(', ')}.
+            Foto: {PHOTO_EXTENSIONS.join(', ')}. Video: {VIDEO_EXTENSIONS.join(', ')}. Arsip: zip, rar (maks 2
+            GB), isinya foto dan video masuk ke folder ini.
           </p>
         </div>
 
@@ -184,14 +242,16 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
                   </span>
                   {entry.mediaType && (
                     <span className="shrink-0 rounded bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-800">
-                      {entry.mediaType === 'photo' ? 'Foto' : 'Video'}
+                      {KIND_LABELS[entry.mediaType]}
                     </span>
                   )}
                   <span className="shrink-0 text-xs text-gray-700">{formatBytes(entry.file.size)}</span>
                 </div>
                 <p
                   className={`text-xs ${
-                    entry.status === 'failed' || entry.status === 'unsupported' ? 'text-red-700' : 'text-gray-700'
+                    entry.status === 'failed' || entry.status === 'unsupported'
+                      ? 'text-red-700'
+                      : 'text-gray-700'
                   }`}
                 >
                   {entry.status === 'uploading'
@@ -218,7 +278,7 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
         <div className="flex flex-wrap items-center justify-end gap-2">
           {pending.length > 0 && (
             <p className="mr-auto text-sm text-gray-700">
-              {photoCount} foto, {videoCount} video
+              {photoCount} foto, {videoCount} video{archiveCount ? `, ${archiveCount} arsip` : ''}
             </p>
           )}
           {isDone ? (

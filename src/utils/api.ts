@@ -139,15 +139,41 @@ export interface UploadResult {
   item: MediaItem | null;
 }
 
+export interface ArchiveImport {
+  importId: string;
+  status: 'queued' | 'unpacking' | 'importing' | 'done' | 'failed';
+  filename: string;
+  total: number;
+  done: number;
+  saved: number;
+  skipped: number;
+  ignored: number;
+  failed: number;
+  error: string | null;
+  failures: string[];
+}
+
 /** XHR instead of fetch: fetch has no upload progress events. */
 export const uploadFile = (
   folderId: number,
   file: File,
   onProgress: (fraction: number) => void,
-): Promise<UploadResult> =>
+): Promise<UploadResult> => postFile<UploadResult>(`/api/folders/${folderId}/files`, file, onProgress);
+
+/** ZIP or RAR: stored, then unpacked by the worker. Poll fetchArchiveImport for the result. */
+export const uploadArchive = (
+  folderId: number,
+  file: File,
+  onProgress: (fraction: number) => void,
+): Promise<ArchiveImport> => postFile<ArchiveImport>(`/api/folders/${folderId}/archives`, file, onProgress);
+
+export const fetchArchiveImport = (importId: string): Promise<ArchiveImport> =>
+  request<ArchiveImport>(`/api/archive-imports/${importId}`);
+
+const postFile = <T>(path: string, file: File, onProgress: (fraction: number) => void): Promise<T> =>
   new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `/api/folders/${folderId}/files`);
+    xhr.open('POST', path);
     xhr.withCredentials = true;
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) onProgress(event.loaded / event.total);
@@ -160,7 +186,7 @@ export const uploadFile = (
         console.error('upload response was not JSON', error);
       }
       if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(body as UploadResult);
+        resolve(body as T);
         return;
       }
       const detail =

@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     tiktok_rate_budget: tuple[int, int] = (150, 900)
     instagram_page_size: int = Field(default=12, gt=0, le=50)
     max_download_bytes: int = Field(default=500 * 1024 * 1024, gt=0)
+    # ZIP/RAR uploads: the archive itself, and everything inside once unpacked.
+    max_archive_bytes: int = Field(default=2 * 1024 * 1024 * 1024, gt=0)
+    max_archive_unpacked_bytes: int = Field(default=4 * 1024 * 1024 * 1024, gt=0)
     max_posts_per_job: int = Field(default=50, gt=0)
     # Lossy, off by default: originals are kept unless disk space becomes the problem.
     compress_photos: bool = False

@@ -3,8 +3,9 @@ FROM ghcr.io/astral-sh/uv:0.11.32 AS uv
 FROM python:3.12-slim-bookworm
 COPY --from=uv /uv /bin/uv
 # ffmpeg: video thumbnails and the optional H.265 transcode.
+# libarchive-tools: bsdtar, unpacks ZIP and RAR uploads.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg libarchive-tools \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

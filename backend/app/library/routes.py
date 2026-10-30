@@ -1,3 +1,6 @@
+import asyncio
+import uuid
+from dataclasses import asdict
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -12,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_db, get_redis, require_user
 from app.config import get_settings
 from app.db import DownloadJob, Folder, MediaItem, User
-from app.library import events, service
+from app.library import archive, events, service
 from app.library.progress import read_progress
 from app.library.storage import DownloadError, LibraryStorage, content_type_for_upload
 from app.models import CamelModel, Platform
@@ -331,6 +334,71 @@ async def upload_file(
     await events.record_upload(db, folder, filename)
     await db.commit()
     return UploadResponse(status="saved", item=_item_response(item))
+
+
+class ArchiveImportResponse(CamelModel):
+    import_id: str
+    status: str
+    filename: str
+    total: int = 0
+    done: int = 0
+    saved: int = 0
+    skipped: int = 0
+    ignored: int = 0
+    failed: int = 0
+    error: str | None = None
+    failures: list[str] = Field(default_factory=list)
+
+
+def get_import_store(request: Request) -> archive.ImportStore:
+    store: archive.ImportStore = request.app.state.import_store
+    return store
+
+
+ImportStoreDep = Annotated[archive.ImportStore, Depends(get_import_store)]
+
+
+@router.post("/folders/{folder_id}/archives", response_model=ArchiveImportResponse, status_code=202)
+async def upload_archive(
+    folder_id: int,
+    file: UploadFile,
+    db: DbSession,
+    storage: Storage,
+    states: ImportStoreDep,
+    queue: Annotated[ArqRedis, Depends(get_queue)],
+    user: Annotated[User, Depends(require_user)],
+) -> ArchiveImportResponse:
+    """Store a ZIP or RAR and let the worker unpack it. Poll /archive-imports/{id}."""
+    if await db.get(Folder, folder_id) is None:
+        raise HTTPException(status_code=404, detail="Folder tidak ditemukan")
+    filename = file.filename or "arsip"
+    if not archive.is_archive(filename):
+        raise HTTPException(status_code=415, detail=f"{filename}: hanya .zip atau .rar")
+    settings = get_settings()
+    try:
+        path = await archive.save_archive_upload(storage, file.read, settings.max_archive_bytes)
+    except archive.ArchiveError as exc:
+        raise HTTPException(status_code=422, detail=f"{filename}: {exc}") from exc
+
+    import_id = uuid.uuid4().hex
+    state = archive.ImportState(filename=filename, folder_id=folder_id)
+    params = {"filename": filename, "folder_id": folder_id, "username": user.username}
+    await asyncio.to_thread(states.save, import_id, state, path=str(path), params=params)
+    await queue.enqueue_job("import_archive", import_id, _job_id=f"archive-{import_id}")
+    return ArchiveImportResponse(import_id=import_id, **_public_state(asdict(state)))
+
+
+def _public_state(raw: dict[str, Any]) -> dict[str, Any]:
+    keys = ArchiveImportResponse.model_fields.keys() - {"import_id"}
+    return {key: raw[key] for key in keys if key in raw}
+
+
+@router.get("/archive-imports/{import_id}", response_model=ArchiveImportResponse)
+async def get_archive_import(import_id: str, states: ImportStoreDep) -> ArchiveImportResponse:
+    raw = await asyncio.to_thread(states.load, import_id)
+    if raw is None:
+        raise HTTPException(status_code=404, detail="Proses arsip tidak ditemukan")
+    return ArchiveImportResponse(import_id=import_id, **_public_state(raw))
 
 
 class DownloadedLookupRequest(CamelModel):

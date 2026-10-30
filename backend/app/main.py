@@ -27,6 +27,7 @@ from app.errors import SourceError
 from app.factory import build_sources, build_storage
 from app.favorites import routes as favorites_routes
 from app.library import routes as library_routes
+from app.library.archive import ImportStore
 from app.library.types import MediaResolver
 from app.media import ALLOWED_CONTENT_TYPE_PREFIXES, is_allowed_media_url, referer_for
 from app.mediacache import MAX_CACHED_IMAGE_BYTES, MediaFileCache
@@ -78,6 +79,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.storage = build_storage(settings)
     app.state.cache = PgPageCache(app.state.session_factory)
     app.state.media_cache = MediaFileCache(settings.library_dir / "mediacache")
+    app.state.import_store = ImportStore(sync_redis)
     app.state.budget = sources.budget
     app.state.sources = {"tiktok": sources.tiktok, "instagram": sources.instagram}
     try:

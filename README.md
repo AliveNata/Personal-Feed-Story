@@ -6,6 +6,7 @@ Feed viewer for TikTok and Instagram accounts, with a private download library. 
 - After login (one account, created from the CLI) you can tick posts and stories, download them into a named folder, and browse the folder with Photo and Video tabs. Folders and single files can be deleted.
 - Posts already in any folder are greyed out in the feed and cannot be ticked again.
 - "Tambah file" uploads your own photos and videos into a folder (drag and drop or file picker). The tab is picked from the file extension.
+- ZIP and RAR files can be added the same way (max `MAX_ARCHIVE_BYTES`, 2 GB, and 4 GB unpacked). The worker unpacks them with `bsdtar`, puts every photo and video inside (any subfolder) into the folder, skips other files, and refuses password protected, split, or old RAR4 solid archives with a clear message.
 - Feed cards are carousels (all slides of an Instagram carousel or a TikTok slideshow) with arrows, dots and autoplay that pauses on hover, focus, video playback and off screen.
 - "Muat lebih banyak" loads older posts. Instagram pages by cursor, TikTok by 30 day windows back to one year.
 - Instagram Reels load on demand, 6 per page with "Muat reels lagi" for the rest. Each page costs about 8 requests (one per reel), so pages are cached for a month like the feed, and Reels pause once 60% of the Instagram budget is used, leaving the rest for feeds and downloads. Downloads reuse the URLs from the Reels page.
