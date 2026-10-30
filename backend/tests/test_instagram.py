@@ -7,6 +7,7 @@ import instaloader
 import pytest
 from instaloader.exceptions import (
     AbortDownloadException,
+    BadResponseException,
     ConnectionException,
     LoginRequiredException,
     ProfileNotExistsException,
@@ -467,3 +468,20 @@ async def test_logged_out_throttle_never_touches_the_account_budget() -> None:
     assert budget.status("instagram_anon").wait_seconds > 0
     assert budget.status("instagram").wait_seconds == 0
     assert budget.session_problem("instagram") is None
+
+
+async def test_unreadable_logged_out_page_retries_with_session_and_never_500s() -> None:
+    # Arrange
+    source, _ = anon_and_session_source()
+    seen: list[str] = []
+
+    def shape_changed() -> str:
+        seen.append(loader_name(source))
+        if source._active_key == "instagram_anon":
+            raise BadResponseException("The page of profile x did not contain its posts.")
+        raise KeyError("edges")
+
+    # Act / Assert
+    with pytest.raises(UpstreamError, match="tidak bisa dibaca"):
+        await source._public(shape_changed, cost=1)
+    assert seen == ["anon", "session"]

@@ -105,6 +105,19 @@ app.include_router(favorites_routes.router)
 app.include_router(session_routes.router)
 
 
+@app.exception_handler(Exception)
+async def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
+    # Still a 500, but with a message that says the backend is up and where to look.
+    logger.exception("unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": f"Error di backend ({type(exc).__name__}). Kirim log: "
+            "docker compose logs backend --tail 60"
+        },
+    )
+
+
 @app.exception_handler(SourceError)
 async def handle_source_error(_request: Request, exc: SourceError) -> JSONResponse:
     headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None

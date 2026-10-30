@@ -19,6 +19,7 @@ import instaloader
 from instaloader.exceptions import (
     AbortDownloadException,
     ConnectionException,
+    InstaloaderException,
     InvalidArgumentException,
     LoginRequiredException,
     PrivateProfileNotFollowedException,
@@ -561,6 +562,16 @@ class InstagramSource:
                     "Instagram membalas 401, session sudah logout atau kedaluwarsa"
                 )
             raise UpstreamError("Gagal mengambil data Instagram") from exc
+        except (InstaloaderException, KeyError, TypeError, ValueError) as exc:
+            # Instagram changes the shape of its pages and responses now and then. instaloader
+            # then raises BadResponseException or trips over missing keys. Never let that
+            # become a 500: logged out, the session may still see the data, so try it.
+            logger.error("instagram response not understood (%s): %s", type(exc).__name__, exc)
+            if anon:
+                raise _NeedsSession(f"{type(exc).__name__} logged out") from exc
+            raise UpstreamError(
+                "Respons Instagram tidak bisa dibaca. Coba lagi nanti, atau Scrape ulang"
+            ) from exc
 
     # Any, like instaloader's own untyped returns: its Post class does not match our Protocols.
     def _profile(self, username: str) -> Any:
