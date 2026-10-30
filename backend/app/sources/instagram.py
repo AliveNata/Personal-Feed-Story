@@ -289,6 +289,19 @@ def _missing_profile() -> UserNotFoundError:
     )
 
 
+def _post_count(profile: Any) -> int | None:
+    """Post count, or None. Logged out, instaloader 4.16 often has no count for a profile."""
+    try:
+        count = profile.mediacount
+    except (KeyError, TypeError, InstaloaderException):
+        count = None
+    if count is None:
+        # The profile page sometimes carries the plain field next to the GraphQL one.
+        raw = getattr(profile, "_node", {}).get("media_count")
+        count = raw if isinstance(raw, int) else None
+    return count
+
+
 def _has_more(iterator: Any) -> bool:
     """Whether a NodeIterator has items left, without pulling one (that would cost a query).
 
@@ -645,7 +658,9 @@ class InstagramSource:
         if self._media_cache is not None:
             self._media_cache.put_many(to_cache)
         next_cursor = None
-        if self._cursors is not None and iterator.total_index < profile.mediacount:
+        total = _post_count(profile)
+        has_more = iterator.total_index < total if total is not None else _has_more(iterator)
+        if self._cursors is not None and has_more:
             mode = "anon" if self._active_key == ANON_BUDGET_KEY else "session"
             next_cursor = self._cursors.put({"mode": mode, **iterator.freeze()._asdict()})
 
@@ -656,7 +671,7 @@ class InstagramSource:
             # Same numbers a probe would fetch, already in hand: no extra query for the baseline.
             snapshot = ProfileProbe(
                 avatar_url=profile.profile_pic_url_no_iphone or "",
-                post_count=profile.mediacount,
+                post_count=_post_count(profile),
                 latest_story_at=None,
             )
         return FeedPage(
@@ -691,10 +706,14 @@ class InstagramSource:
 
     def _probe_sync(self, username: str) -> ProfileProbe:
         profile = self._profile(username)
+        count = _post_count(profile)
+        if count is None and self._active_key == ANON_BUDGET_KEY:
+            # The post count is the whole point of a probe: ask with the session instead.
+            raise _NeedsSession("post count missing logged out")
         return ProfileProbe(
             # The plain property fetches an extra iPhone endpoint when logged in.
             avatar_url=profile.profile_pic_url_no_iphone or "",
-            post_count=profile.mediacount,
+            post_count=count,
             # Stories are not checked anymore, they load on demand.
             latest_story_at=None,
         )

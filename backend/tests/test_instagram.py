@@ -21,6 +21,7 @@ from app.sources.instagram import (
     InstagramSource,
     MediaCache,
     _has_more,
+    _post_count,
     _to_highlight,
     instagram_media_urls,
     instagram_slides,
@@ -485,3 +486,13 @@ async def test_unreadable_logged_out_page_retries_with_session_and_never_500s() 
     with pytest.raises(UpstreamError, match="tidak bisa dibaca"):
         await source._public(shape_changed, cost=1)
     assert seen == ["anon", "session"]
+
+
+def test_post_count_reads_raw_field_and_tolerates_missing() -> None:
+    # Arrange
+    with_raw = SimpleNamespace(mediacount=None, _node={"media_count": 128})
+    without = SimpleNamespace(mediacount=None, _node={})
+
+    # Act / Assert
+    assert _post_count(with_raw) == 128
+    assert _post_count(without) is None
