@@ -292,9 +292,10 @@ def _missing_profile() -> UserNotFoundError:
 def _post_count(profile: Any) -> int | None:
     """Post count, or None. Logged out, instaloader 4.16 often has no count for a profile."""
     try:
-        count = profile.mediacount
+        value = profile.mediacount
     except (KeyError, TypeError, InstaloaderException):
-        count = None
+        value = None
+    count = value if isinstance(value, int) else None
     if count is None:
         # The profile page sometimes carries the plain field next to the GraphQL one.
         raw = getattr(profile, "_node", {}).get("media_count")
