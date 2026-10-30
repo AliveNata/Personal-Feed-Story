@@ -14,6 +14,7 @@ import { MediaItem } from '../types';
 import { MoveResult, formatBytes } from '../utils/api';
 import MoveForm from './MoveForm';
 import { ConfirmDelete, focusRing, secondaryButton } from './ui';
+import { SEEK_STEP_SECONDS, SeekFlash } from './VideoSeekZones';
 import ZoomableMedia from './ZoomableMedia';
 import { MAX_SCALE, useZoom } from './zoom';
 
@@ -76,6 +77,26 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
     };
   }, [item.id]);
 
+  const [seekFlash, setSeekFlash] = useState<SeekFlash | null>(null);
+  const lastSeek = useRef<{ side: SeekFlash['side']; seconds: number; at: number } | null>(null);
+
+  // Repeated seeks in the same direction add up in the bubble ("+15 detik"), like phone players.
+  const seek = (seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const end = Number.isFinite(video.duration) ? video.duration : video.currentTime + seconds;
+    video.currentTime = Math.min(Math.max(video.currentTime + seconds, 0), end);
+    const side = seconds < 0 ? 'back' : 'forward';
+    const now = performance.now();
+    const previous = lastSeek.current;
+    const total =
+      previous && previous.side === side && now - previous.at < 1000
+        ? previous.seconds + Math.abs(seconds)
+        : Math.abs(seconds);
+    lastSeek.current = { side, seconds: total, at: now };
+    setSeekFlash({ side, seconds: total, key: now });
+  };
+
   const togglePlay = () => {
     const video = videoRef.current;
     if (video) void (video.paused ? video.play() : video.pause());
@@ -110,6 +131,30 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
       const target = event.target as HTMLElement;
       // Arrow keys inside the video player seek the video, so leave them alone there.
       if (target.tagName === 'VIDEO') return;
+      // Typing in a field is not a shortcut, and buttons and links handle Space themselves.
+      if (target.closest('input, textarea')) return;
+      if (event.key === ' ' && target.closest('button, a')) return;
+      if (isVideo && !event.shiftKey) {
+        // YouTube style keys: arrows 5 s, J and L 10 s, K or Space play and pause, M mute.
+        const keyActions: Record<string, () => void> = {
+          ArrowLeft: () => seek(-SEEK_STEP_SECONDS),
+          ArrowRight: () => seek(SEEK_STEP_SECONDS),
+          j: () => seek(-10),
+          l: () => seek(10),
+          k: togglePlay,
+          ' ': togglePlay,
+          m: () => {
+            if (videoRef.current) videoRef.current.muted = !videoRef.current.muted;
+          },
+        };
+        const action = keyActions[event.key];
+        if (action) {
+          event.preventDefault();
+          action();
+          return;
+        }
+      }
+      // On a video, Shift plus an arrow moves between files.
       if (event.key === 'ArrowLeft' && onPrevious) onPrevious();
       if (event.key === 'ArrowRight' && onNext) onNext();
       if (event.key === 'f') toggleFullscreen();
@@ -208,6 +253,10 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
             zoom={zoom}
             setZoom={setZoom}
             zoomAt={zoomAt}
+            onSeek={seek}
+            onTogglePlay={togglePlay}
+            onToggleFullscreen={toggleFullscreen}
+            seekFlash={seekFlash}
           />
           <button
             type="button"
@@ -240,6 +289,13 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
             {formatBytes(item.sizeBytes)}
           </p>
           {item.caption && <p className="mt-1 text-gray-900 break-words line-clamp-3">{item.caption}</p>}
+          {isVideo && (
+            // Phones get the tap zones, keyboards get the usual player keys.
+            <p className="mt-1 hidden text-xs text-gray-700 md:block">
+              Keyboard: ← → 5 detik, J L 10 detik, K atau Spasi putar/jeda, M bisu, F layar penuh, Shift + ← →
+              file lain. Klik 2x di kiri/kanan video juga bisa buat layar penuh.
+            </p>
+          )}
           <div className="mt-3 flex flex-wrap gap-2">
             <a
               href={`${item.fileUrl}?download=true`}

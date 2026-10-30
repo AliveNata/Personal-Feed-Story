@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import VideoSeekZones, { SeekFlash } from './VideoSeekZones';
 import { MAX_SCALE, MIN_SCALE, Point, ZoomState, clamp } from './zoom';
 
 const WHEEL_STEP = 0.0015;
@@ -16,6 +17,11 @@ interface ZoomableMediaProps {
   zoom: ZoomState;
   setZoom: React.Dispatch<React.SetStateAction<ZoomState>>;
   zoomAt: (factor: number, at?: Point) => void;
+  // Video only: tap zones for seeking, play and pause.
+  onSeek?: (seconds: number) => void;
+  onTogglePlay?: () => void;
+  onToggleFullscreen?: () => void;
+  seekFlash?: SeekFlash | null;
 }
 
 /**
@@ -32,6 +38,10 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
   zoom,
   setZoom,
   zoomAt,
+  onSeek,
+  onTogglePlay,
+  onToggleFullscreen,
+  seekFlash = null,
 }) => {
   const frameRef = useRef<HTMLDivElement>(null);
   const tapStart = useRef<Point | null>(null);
@@ -129,7 +139,8 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
       start !== null &&
       Math.hypot(event.clientX - start.x, event.clientY - start.y) < TAP_SLOP_PX &&
       pointers.current.size === 1;
-    if (isTap && kind === 'video' && zoom.scale > 1) {
+    const onZone = (event.target as HTMLElement).closest('[data-seek-zone]') !== null;
+    if (isTap && kind === 'video' && zoom.scale > 1 && !onZone) {
       const video = videoRef?.current;
       if (video) void (video.paused ? video.play() : video.pause());
     }
@@ -155,7 +166,7 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
       // touch-none: the browser would otherwise scroll or zoom the page on pinch.
-      className={`flex h-full w-full touch-none select-none items-center justify-center overflow-hidden ${
+      className={`relative flex h-full w-full touch-none select-none items-center justify-center overflow-hidden ${
         isZoomed ? 'cursor-grab active:cursor-grabbing' : kind === 'photo' ? 'cursor-zoom-in' : ''
       }`}
     >
@@ -172,6 +183,14 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
         />
       ) : (
         <img src={src} alt={alt} draggable={false} style={mediaStyle} className={mediaClass} />
+      )}
+      {kind === 'video' && onSeek && onTogglePlay && onToggleFullscreen && (
+        <VideoSeekZones
+          onSeek={onSeek}
+          onTogglePlay={onTogglePlay}
+          onToggleFullscreen={onToggleFullscreen}
+          flash={seekFlash}
+        />
       )}
     </div>
   );
