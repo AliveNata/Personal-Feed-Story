@@ -39,6 +39,7 @@ from app.models import (
     Platform,
     RateInfo,
     ReelsResponse,
+    StoriesResponse,
     proxied_media_url,
 )
 from app.ratelimit import RateBudget
@@ -203,6 +204,37 @@ async def get_feed(
         fetched_at=fetched_at,
         checked_at=checked_at,
     )
+
+
+# Stories change through the day: a cached list is reused only this long.
+STORIES_CACHE_SECONDS = 10 * 60
+
+
+@app.get("/api/instagram/stories", response_model=StoriesResponse)
+async def list_stories(
+    username: Annotated[str, Query(pattern=USERNAME_PATTERN)],
+    instagram: Annotated[InstagramSource, Depends(get_instagram)],
+    cache: Annotated[PageCache, Depends(get_cache)],
+    budget: Annotated[RateBudget | None, Depends(get_budget)],
+    refresh: bool = False,
+) -> StoriesResponse:
+    username = username.removeprefix("@")
+    key = page_key("stories", "instagram", username)
+    cached = None if refresh else await cache.get(key, StoriesResponse)
+    now = datetime.now(UTC)
+    if cached is not None and (now - cached.fetched_at).total_seconds() < STORIES_CACHE_SECONDS:
+        return cached.value.model_copy(
+            update={
+                "cached": True,
+                "fetched_at": cached.fetched_at,
+                "rate": rate_info(budget, "instagram"),
+            }
+        )
+    status, items = await instagram.fetch_stories(username)
+    response = StoriesResponse(status=status, items=items, fetched_at=now)
+    if status != "login_required":
+        await cache.set(key, "instagram", username, response)
+    return response.model_copy(update={"rate": rate_info(budget, "instagram")})
 
 
 @app.get("/api/instagram/reels", response_model=ReelsResponse)

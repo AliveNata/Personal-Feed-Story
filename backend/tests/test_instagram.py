@@ -8,6 +8,7 @@ import pytest
 from instaloader.exceptions import (
     AbortDownloadException,
     ConnectionException,
+    LoginRequiredException,
     ProfileNotExistsException,
 )
 
@@ -402,4 +403,67 @@ def test_401_marks_the_session_for_replacement_and_a_success_clears_it() -> None
 
     # Assert
     assert flagged is not None and "401" in str(flagged["reason"])
+    assert budget.session_problem("instagram") is None
+
+
+def anon_and_session_source() -> tuple[InstagramSource, RateBudget]:
+    budget = RateBudget(
+        fakeredis.FakeRedis(), {"instagram": (100, 900), "instagram_anon": (60, 900)}
+    )
+    session = SimpleNamespace(context=SimpleNamespace(is_logged_in=True, name="session"))
+    source = InstagramSource(session, True, budget=budget)  # type: ignore[arg-type]
+    source._anon_loader = SimpleNamespace(  # type: ignore[assignment]
+        context=SimpleNamespace(is_logged_in=False, name="anon")
+    )
+    return source, budget
+
+
+def loader_name(source: InstagramSource) -> str:
+    name: str = getattr(source._active_loader.context, "name")  # noqa: B009 - fake attribute
+    return name
+
+
+async def test_public_requests_go_logged_out_first() -> None:
+    # Arrange
+    source, _ = anon_and_session_source()
+
+    # Act
+    used = await source._public(lambda: loader_name(source), cost=1)
+
+    # Assert
+    assert used == "anon"
+
+
+async def test_private_profile_retries_with_the_session() -> None:
+    # Arrange
+    source, _ = anon_and_session_source()
+    seen: list[str] = []
+
+    def only_with_session() -> str:
+        seen.append(loader_name(source))
+        if source._active_key == "instagram_anon":
+            raise LoginRequiredException("private")
+        return "posts"
+
+    # Act
+    result = await source._public(only_with_session, cost=1)
+
+    # Assert
+    assert (result, seen) == ("posts", ["anon", "session"])
+
+
+async def test_logged_out_throttle_never_touches_the_account_budget() -> None:
+    # Arrange
+    source, budget = anon_and_session_source()
+
+    def throttled() -> None:
+        raise ConnectionException("JSON Query: 429 Too Many Requests")
+
+    # Act
+    with pytest.raises(RateLimitedError, match="tanpa login"):
+        await source._public(throttled, cost=1)
+
+    # Assert
+    assert budget.status("instagram_anon").wait_seconds > 0
+    assert budget.status("instagram").wait_seconds == 0
     assert budget.session_problem("instagram") is None

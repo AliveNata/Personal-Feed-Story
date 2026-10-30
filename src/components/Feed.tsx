@@ -5,7 +5,7 @@ import { useAuth } from '../auth/AuthContext';
 import FavoriteToggle from '../favorites/FavoriteToggle';
 import { useFavorites } from '../favorites/FavoritesContext';
 import { Platform, Post, RateInfo, StoriesStatus } from '../types';
-import { formatRelativeTime, lookupDownloaded } from '../utils/api';
+import { ApiError, fetchStories, formatRelativeTime, lookupDownloaded } from '../utils/api';
 import DownloadBar from './DownloadBar';
 import Highlights from './Highlights';
 import Reels from './Reels';
@@ -22,7 +22,7 @@ import {
   downloadStates as toDownloadStates,
   isBusy,
 } from './downloadState';
-import { focusRing, primaryButton } from './ui';
+import { focusRing, primaryButton, secondaryButton } from './ui';
 
 export type FeedStatus = 'idle' | 'loading' | 'success' | 'error';
 
@@ -50,6 +50,44 @@ const STORIES_MESSAGES: Record<StoriesStatus, string | null> = {
   none: 'Tidak ada story aktif dalam 24 jam terakhir.',
   login_required: 'Story butuh session Instagram di backend (IG_USERNAME).',
   not_supported: 'Story TikTok belum didukung.',
+  on_demand: null,
+};
+
+type StoriesLoad =
+  | { status: 'idle' | 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'done'; result: 'available' | 'none' | 'login_required'; fetchedAt: string | null };
+
+const STORY_RESULT_TEXT = {
+  none: 'Tidak ada story aktif dalam 24 jam terakhir.',
+  login_required: 'Story butuh session Instagram. Pasang di halaman Session.',
+};
+
+const StoriesLoader: React.FC<{ state: StoriesLoad; onLoad: () => void }> = ({ state, onLoad }) => {
+  if (state.status === 'loading') {
+    return (
+      <p role="status" className="text-gray-700">
+        Memuat story...
+      </p>
+    );
+  }
+  if (state.status === 'done' && state.result !== 'available') {
+    return <p className="text-gray-700">{STORY_RESULT_TEXT[state.result]}</p>;
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <button type="button" className={secondaryButton} onClick={onLoad}>
+        {state.status === 'error' ? 'Coba lagi' : 'Tampilkan story'}
+      </button>
+      {state.status === 'error' ? (
+        <p role="alert" className="text-sm text-red-700">
+          {state.message}
+        </p>
+      ) : (
+        <p className="text-sm text-gray-700">Dimuat kalau diklik, biar akun Instagram lebih hemat request.</p>
+      )}
+    </div>
+  );
 };
 
 const Feed: React.FC<FeedProps> = ({
@@ -83,6 +121,8 @@ const Feed: React.FC<FeedProps> = ({
   const highlightIds = useRef<Set<string>>(new Set());
   const reelIds = useRef<Set<string>>(new Set());
   const [trackedJob, setTrackedJob] = useState<TrackedJob | null>(null);
+  const [loadedStories, setLoadedStories] = useState<Post[]>([]);
+  const [storiesLoad, setStoriesLoad] = useState<StoriesLoad>({ status: 'idle' });
 
   // A different account means different post ids, so old state would point at nothing.
   useEffect(() => {
@@ -90,6 +130,8 @@ const Feed: React.FC<FeedProps> = ({
     setSavedIn({});
     knownItems.current = new Map();
     highlightIds.current = new Set();
+    setLoadedStories([]);
+    setStoriesLoad({ status: 'idle' });
     reelIds.current = new Set();
   }, [platform, username]);
 
@@ -138,6 +180,24 @@ const Feed: React.FC<FeedProps> = ({
       return next;
     });
 
+  // On demand: the story query is the one Instagram watches most, so only when asked.
+  const loadStories = (refresh = false) => {
+    setStoriesLoad({ status: 'loading' });
+    fetchStories(username, refresh)
+      .then((response) => {
+        setLoadedStories(response.items);
+        setStoriesLoad({ status: 'done', result: response.status, fetchedAt: response.fetchedAt });
+        lookupSaved(response.items);
+      })
+      .catch((error: unknown) => {
+        console.error('fetchStories failed', error);
+        setStoriesLoad({
+          status: 'error',
+          message: error instanceof ApiError ? error.message : 'Gagal memuat story',
+        });
+      });
+  };
+
   const toggle = (id: string) =>
     setSelected((previous) => {
       const next = new Set(previous);
@@ -177,7 +237,7 @@ const Feed: React.FC<FeedProps> = ({
     );
   }
 
-  const stories = posts.filter((post) => post.isStory);
+  const stories = [...posts.filter((post) => post.isStory), ...loadedStories];
   const regularPosts = posts.filter((post) => !post.isStory);
   const itemStates = toDownloadStates(trackedJob);
   const isPending = (id: string) => savedIn[id] === undefined && isBusy(itemStates[id]);
@@ -202,9 +262,7 @@ const Feed: React.FC<FeedProps> = ({
         <p className="text-sm text-gray-700">
           {platformLabel} @{username}, {regularPosts.length} post
           {stories.length ? `, ${stories.length} story` : ''}
-          {cached
-            ? ` (dari cache${fetchedAt ? `, diambil ${formatRelativeTime(fetchedAt)}` : ''})`
-            : ''}
+          {cached ? ` (dari cache${fetchedAt ? `, diambil ${formatRelativeTime(fetchedAt)}` : ''})` : ''}
         </p>
         {user && <FavoriteToggle platform={platform} username={username} />}
         {!user && (
@@ -248,8 +306,18 @@ const Feed: React.FC<FeedProps> = ({
               />
             ))}
           </div>
+        ) : storiesStatus === 'on_demand' ? (
+          <StoriesLoader state={storiesLoad} onLoad={() => loadStories()} />
         ) : (
           <p className="text-gray-700">{storiesMessage ?? 'Tidak ada story.'}</p>
+        )}
+        {storiesStatus === 'on_demand' && storiesLoad.status === 'done' && stories.length > 0 && (
+          <p className="mt-3 text-sm text-gray-700">
+            {storiesLoad.fetchedAt ? `Diambil ${formatRelativeTime(storiesLoad.fetchedAt)}. ` : ''}
+            <button type="button" className={`underline ${focusRing}`} onClick={() => loadStories(true)}>
+              Muat ulang story
+            </button>
+          </p>
         )}
       </section>
 
@@ -304,9 +372,7 @@ const Feed: React.FC<FeedProps> = ({
           />
         )}
       </div>
-      {regularPosts.length === 0 && (
-        <p className="mb-4 text-gray-700">Belum ada post di rentang ini.</p>
-      )}
+      {regularPosts.length === 0 && <p className="mb-4 text-gray-700">Belum ada post di rentang ini.</p>}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         {regularPosts.map((post) => {
           const savedFolders = savedIn[post.id];
@@ -324,10 +390,7 @@ const Feed: React.FC<FeedProps> = ({
                   username={username}
                   isSaved={savedFolders !== undefined || itemStates[post.id] === 'done'}
                 />
-                <DownloadOverlay
-                  state={itemStates[post.id]}
-                  percent={downloadPercent(trackedJob, post.id)}
-                />
+                <DownloadOverlay state={itemStates[post.id]} percent={downloadPercent(trackedJob, post.id)} />
               </div>
               {user && (
                 <SelectToggle
@@ -367,7 +430,8 @@ const Feed: React.FC<FeedProps> = ({
               </div>
               <div className="flex items-center gap-2 bg-gray-100 px-4 py-2 text-sm text-gray-700">
                 <span>
-                  {platformLabel} • <time dateTime={post.createdAt}>{formatRelativeTime(post.createdAt)}</time>
+                  {platformLabel} •{' '}
+                  <time dateTime={post.createdAt}>{formatRelativeTime(post.createdAt)}</time>
                 </span>
                 {post.permalink && (
                   <a

@@ -5,7 +5,7 @@ import logging
 import random
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from sqlalchemy import func, select
@@ -119,9 +119,17 @@ async def check_all(
     budget: RateBudget,
     delays: Mapping[str, tuple[float, float]],
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    *,
+    min_interval: Mapping[str, timedelta] | None = None,
+    budget_keys: Mapping[str, str] | None = None,
 ) -> CheckSummary:
-    """Probe every favorite, least recently checked first, within the background budget."""
+    """Probe every favorite, least recently checked first, within the background budget.
+
+    min_interval skips accounts checked more recently than that per platform. budget_keys
+    names the budget a platform's probes count against (Instagram probes run logged out).
+    """
     summary = CheckSummary()
+    now = datetime.now(UTC)
     async with session_factory() as db:
         favorites = (
             await db.scalars(select(Favorite).order_by(Favorite.checked_at.asc().nulls_first()))
@@ -130,7 +138,11 @@ async def check_all(
             platform = favorite.platform
             if platform in summary.skipped_platforms or platform not in probers:
                 continue
-            if not await asyncio.to_thread(_has_room, budget, platform):
+            interval = (min_interval or {}).get(platform)
+            if interval and favorite.checked_at and now - favorite.checked_at < interval:
+                continue
+            budget_key = (budget_keys or {}).get(platform, platform)
+            if not await asyncio.to_thread(_has_room, budget, budget_key):
                 logger.info("favorites check: %s budget reserved for scraping, stopping", platform)
                 summary.skipped_platforms.add(platform)
                 continue

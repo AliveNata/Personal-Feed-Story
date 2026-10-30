@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import timedelta
 from typing import Any, ClassVar
 
 import httpx
@@ -18,6 +19,7 @@ from app.library.jobs import JobRunner
 from app.library.progress import RedisProgress
 from app.library.types import MediaResolver
 from app.mediacache import MediaFileCache
+from app.sources.instagram import ANON_BUDGET_KEY
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -67,7 +69,11 @@ async def download_job(ctx: dict[str, Any], job_id: str) -> None:
     await runner.run(job_id)
 
 
-async def check_favorites(ctx: dict[str, Any]) -> None:
+# Instagram favorites are checked less often than the 2 hour cron, to spare the account.
+INSTAGRAM_CHECK_INTERVAL = timedelta(hours=6)
+
+
+async def check_favorites(ctx: dict[str, Any], force: bool = False) -> None:
     redis: Redis = ctx["redis"]
     sources = ctx["sources"]
     redis.set(favorites.CHECKING_KEY, "1", ex=favorites.CHECKING_TTL_SECONDS)
@@ -77,6 +83,9 @@ async def check_favorites(ctx: dict[str, Any]) -> None:
             {"tiktok": sources.tiktok, "instagram": sources.instagram},
             sources.budget,
             ctx["delays"],
+            # "Cek sekarang" checks everything, the cron respects the interval.
+            min_interval=None if force else {"instagram": INSTAGRAM_CHECK_INTERVAL},
+            budget_keys={"instagram": ANON_BUDGET_KEY},
         )
     finally:
         redis.delete(favorites.CHECKING_KEY)

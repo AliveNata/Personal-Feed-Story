@@ -10,7 +10,13 @@ from app.config import Settings
 from app.library.storage import LibraryStorage
 from app.platform_sessions import SecretBox, SessionStore, SessionSync
 from app.ratelimit import RateBudget
-from app.sources.instagram import CursorStore, InstagramSource, MediaCache, build_loader
+from app.sources.instagram import (
+    ANON_BUDGET_KEY,
+    CursorStore,
+    InstagramSource,
+    MediaCache,
+    build_loader,
+)
 from app.sources.tiktok import TikTokSource
 
 
@@ -33,6 +39,7 @@ def build_sources(
         redis,
         {
             "instagram": settings.instagram_rate_budget,
+            ANON_BUDGET_KEY: settings.instagram_anon_rate_budget,
             "tiktok": settings.tiktok_rate_budget,
         },
     )

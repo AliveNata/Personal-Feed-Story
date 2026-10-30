@@ -46,6 +46,8 @@ from app.sources import ProfileProbe
 logger = logging.getLogger(__name__)
 
 PLATFORM = "instagram"
+# Public posts are fetched logged out, so they count against the server IP, not the account.
+ANON_BUDGET_KEY = "instagram_anon"
 STORY_ID_PREFIX = "story-"
 # Cached pages keep their cursor for load more, instaloader itself refuses one older than a day.
 CURSOR_TTL_SECONDS = 24 * 60 * 60
@@ -178,26 +180,32 @@ def map_instagram_story_item(item: InstagramStoryItemLike) -> Post:
 class BudgetRateController(RateController):
     """Counts every Instagram query and refuses to sleep for minutes when near the limit."""
 
-    def __init__(self, context: InstaloaderContext, budget: RateBudget) -> None:
+    def __init__(
+        self, context: InstaloaderContext, budget: RateBudget, budget_key: str = PLATFORM
+    ) -> None:
         super().__init__(context)
         self._budget = budget
+        self._key = budget_key
 
     def wait_before_query(self, query_type: str) -> None:
         wait = self.query_waittime(query_type, time.monotonic(), False)
         if wait > MAX_ACCEPTABLE_WAIT_SECONDS:
-            self._budget.cooldown(PLATFORM, math.ceil(wait))
+            self._budget.cooldown(self._key, math.ceil(wait))
             raise TooManyRequestsException(wait_message(math.ceil(wait)))
-        self._budget.record(PLATFORM)
+        self._budget.record(self._key)
         super().wait_before_query(query_type)
 
     def handle_429(self, query_type: str) -> None:
         # Instaloader would sleep here for many minutes. Fail fast and remember the cooldown.
-        seconds = self._budget.throttled(PLATFORM, COOLDOWN_AFTER_429_SECONDS)
+        seconds = self._budget.throttled(self._key, COOLDOWN_AFTER_429_SECONDS)
         raise TooManyRequestsException(wait_message(seconds))
 
 
 def build_loader(
-    username: str, session_file: Path | None, budget: RateBudget | None = None
+    username: str,
+    session_file: Path | None,
+    budget: RateBudget | None = None,
+    budget_key: str = PLATFORM,
 ) -> instaloader.Instaloader:
     loader = instaloader.Instaloader(
         quiet=True,
@@ -206,12 +214,14 @@ def build_loader(
         save_metadata=False,
         max_connection_attempts=1,
         request_timeout=30.0,
-        rate_controller=(lambda ctx: BudgetRateController(ctx, budget)) if budget else None,
+        rate_controller=(
+            (lambda ctx: BudgetRateController(ctx, budget, budget_key)) if budget else None
+        ),
     )
     if username and session_file is not None:
         loader.load_session_from_file(username, str(session_file))
         logger.info("instagram session loaded for %s", username)
-    else:
+    elif budget_key == PLATFORM:
         logger.warning(
             "no instagram session configured, stories disabled and rate limits are tight"
         )
@@ -261,6 +271,20 @@ def _profile_unreadable(username: str) -> UserNotFoundError:
         f"Profil @{username} tidak kebaca dari Instagram. Cek lagi ejaan username-nya. "
         "Kalau sudah benar, jalur cadangan profil Instagram lagi dibatasi, coba akun ini lagi "
         "sekitar 15 menit. Akun lain tetap bisa dibuka"
+    )
+
+
+class _NeedsSession(Exception):
+    """A logged out request could not see the profile: retry it with the session."""
+
+
+def _missing_profile() -> UserNotFoundError:
+    # Instagram answers "no such user" for more than typos: age or country restricted
+    # accounts, accounts that blocked the session, and sessions it is limiting.
+    return UserNotFoundError(
+        "Instagram tidak memberi data profil ini. Kalau username sudah benar, bisa karena "
+        "akunnya dibatasi umur atau negara, memblokir akun session, atau session sedang "
+        "dibatasi. Coba buka profilnya pakai akun yang sama"
     )
 
 
@@ -397,6 +421,11 @@ class InstagramSource:
         self._loader = loader
         # The .env / session file loader, used again when the web session is removed.
         self._default_loader = loader
+        # Logged out loader for public profiles and posts: keeps load off the account.
+        self._anon_loader = build_loader("", None, budget, ANON_BUDGET_KEY) if budget else None
+        # The loader of the call running under self._lock, read by the sync helpers.
+        self._active_loader = loader
+        self._active_key = PLATFORM
         self._session_sync: SessionSync | None = None
         self._profile_api_paused_until = 0.0
         self._include_stories = include_stories
@@ -426,41 +455,78 @@ class InstagramSource:
         if self._session_sync is not None:
             await self._session_sync.ensure_current()
 
-    async def _run(self, func: Callable[[], T], cost: int) -> T:
+    async def _run(self, func: Callable[[], T], cost: int, *, anon: bool = False) -> T:
         await self._sync()
+        use_anon = anon and self._anon_loader is not None
+        key = ANON_BUDGET_KEY if use_anon else PLATFORM
         if self._budget is not None:
-            await asyncio.to_thread(self._budget.ensure_available, PLATFORM, cost)
-        return await asyncio.to_thread(self._guarded, func)
+            await asyncio.to_thread(self._budget.ensure_available, key, cost)
+        return await asyncio.to_thread(self._guarded, func, use_anon)
 
-    def _guarded(self, func: Callable[[], T]) -> T:
-        with self._lock, self._translate_errors():
-            result = func()
-        if self._budget is not None and self._loader.context.is_logged_in:
-            # A logged in request just worked, so the session is fine again.
-            self._budget.clear_session_problem(PLATFORM)
-        return result
+    async def _public(self, func: Callable[[], T], cost: int) -> T:
+        """Logged out first. Private or hidden profiles then go through the session."""
+        if self._anon_loader is None:
+            return await self._run(func, cost)
+        try:
+            return await self._run(func, cost, anon=True)
+        except _NeedsSession as exc:
+            if not self._loader.context.is_logged_in:
+                raise PrivateAccountError(
+                    "Akun ini tidak bisa dibuka tanpa login. Pasang session Instagram dulu"
+                ) from exc
+            logger.info("instagram %s, retrying with the session", exc)
+            return await self._run(func, cost)
+
+    def _guarded(self, func: Callable[[], T], anon: bool = False) -> T:
+        with self._lock:
+            loader = self._anon_loader if anon and self._anon_loader else self._loader
+            self._active_loader = loader
+            self._active_key = ANON_BUDGET_KEY if anon else PLATFORM
+            with self._translate_errors():
+                result = func()
+            if self._budget is not None and not anon and loader.context.is_logged_in:
+                # A logged in request just worked, so the session is fine again.
+                self._budget.clear_session_problem(PLATFORM)
+            return result
 
     def _session_rejected(self, reason: str) -> None:
-        if self._budget is not None and self._loader.context.is_logged_in:
+        if (
+            self._budget is not None
+            and self._active_key == PLATFORM
+            and self._active_loader.context.is_logged_in
+        ):
             logger.warning("instagram session rejected: %s", reason)
             self._budget.mark_session_problem(PLATFORM, reason)
 
+    def _throttle_error(self, base_seconds: int) -> RateLimitedError:
+        key = self._active_key
+        seconds = self._budget.throttled(key, base_seconds) if self._budget else base_seconds
+        if key == ANON_BUDGET_KEY:
+            return RateLimitedError(
+                "Instagram lagi membatasi akses tanpa login dari IP server ini. Tunggu sekitar "
+                f"{math.ceil(seconds / 60)} menit. Akun Instagram lu tidak ikut kena",
+                retry_after=seconds,
+            )
+        return RateLimitedError(wait_message(seconds), retry_after=seconds)
+
     @contextmanager
     def _translate_errors(self) -> Iterator[None]:
+        anon = self._active_key == ANON_BUDGET_KEY
         try:
             yield
         except TooManyRequestsException as exc:
-            wait = self._budget.status(PLATFORM).wait_seconds if self._budget else 0
+            key = self._active_key
+            wait = self._budget.status(key).wait_seconds if self._budget else 0
             raise RateLimitedError(wait_message(wait or 60), retry_after=wait or 60) from exc
-        except ProfileNotExistsException as exc:
-            # Instagram answers "no such user" for more than typos: age or country restricted
-            # accounts, accounts that blocked the session, and sessions it is limiting.
-            logger.warning("instagram profile lookup empty: %s", exc)
-            raise UserNotFoundError(
-                "Instagram tidak memberi data profil ini. Kalau username sudah benar, bisa karena "
-                "akunnya dibatasi umur atau negara, memblokir akun di IG_USERNAME, atau session "
-                "IG sedang dibatasi (feedback_required). Coba buka profilnya pakai akun yang sama"
-            ) from exc
+        except (ProfileNotExistsException, LoginRequiredException) as exc:
+            if anon:
+                # Private, age or region restricted profiles look empty when logged out.
+                raise _NeedsSession(f"{type(exc).__name__} logged out") from exc
+            if isinstance(exc, LoginRequiredException):
+                # Logged in yet told to log in: Instagram dropped the session.
+                self._session_rejected("Instagram minta login ulang, session sudah tidak berlaku")
+                raise PrivateAccountError("Akun ini private atau butuh login Instagram") from exc
+            raise _missing_profile() from exc
         except QueryReturnedNotFoundException as exc:
             logger.warning("instagram query returned 404: %s", exc)
             raise UserNotFoundError(
@@ -468,13 +534,11 @@ class InstagramSource:
             ) from exc
         except PrivateProfileNotFollowedException as exc:
             raise PrivateAccountError("Akun ini private dan tidak di-follow akun session") from exc
-        except LoginRequiredException as exc:
-            # Logged in yet told to log in: Instagram dropped the session.
-            self._session_rejected("Instagram minta login ulang, session sudah tidak berlaku")
-            raise PrivateAccountError("Akun ini private atau butuh login Instagram") from exc
         except AbortDownloadException as exc:
             # Raised for 400 "feedback_required" and similar: Instagram is limiting this account.
             logger.error("instagram aborted the request: %s", exc)
+            if anon:
+                raise self._throttle_error(COOLDOWN_AFTER_429_SECONDS) from exc
             seconds = (
                 self._budget.throttled(PLATFORM, COOLDOWN_AFTER_FEEDBACK_SECONDS)
                 if self._budget is not None
@@ -491,12 +555,7 @@ class InstagramSource:
         except ConnectionException as exc:
             logger.error("instagram request failed: %s", exc)
             if _is_throttle(exc):
-                seconds = (
-                    self._budget.throttled(PLATFORM, COOLDOWN_AFTER_429_SECONDS)
-                    if self._budget is not None
-                    else COOLDOWN_AFTER_429_SECONDS
-                )
-                raise RateLimitedError(wait_message(seconds), retry_after=seconds) from exc
+                raise self._throttle_error(COOLDOWN_AFTER_429_SECONDS) from exc
             if "401" in str(exc):
                 self._session_rejected(
                     "Instagram membalas 401, session sudah logout atau kedaluwarsa"
@@ -510,10 +569,13 @@ class InstagramSource:
         instaloader reads the profile from the embedded data of its web page. Instagram leaves
         that data out for some accounts that do exist, so ask the web_profile_info API next.
         """
-        context = self._loader.context
+        context = self._active_loader.context
         try:
             return instaloader.Profile.from_username(context, username)
         except ProfileNotExistsException as page_error:
+            if self._active_key == ANON_BUDGET_KEY:
+                # The session path has the fallback below, no need to spend it twice.
+                raise
             if time.monotonic() < self._profile_api_paused_until:
                 raise _profile_unreadable(username) from page_error
             logger.info(
@@ -538,15 +600,20 @@ class InstagramSource:
             return instaloader.Profile(context, user)
 
     async def fetch_page(self, username: str, cursor: str | None) -> FeedPage:
-        return await self._run(lambda: self._fetch_page_sync(username, cursor), cost=3)
+        """Posts only, logged out when the profile allows it. Stories load on their own."""
+        if cursor is None:
+            return await self._public(lambda: self._fetch_page_sync(username, None), cost=2)
+        state = await asyncio.to_thread(self._cursors.get, cursor) if self._cursors else None
+        if state is None:
+            raise UpstreamError("Halaman berikutnya kedaluwarsa, klik Scrape ulang")
+        # Continue with the loader that made the first page: an iterator only works there.
+        anon = state.pop("mode", "session") == "anon"
+        return await self._run(lambda: self._fetch_page_sync(username, state), cost=2, anon=anon)
 
-    def _fetch_page_sync(self, username: str, cursor: str | None) -> FeedPage:
+    def _fetch_page_sync(self, username: str, state: dict[str, Any] | None) -> FeedPage:
         profile = self._profile(username)
         iterator = profile.get_posts()
-        if cursor:
-            state = self._cursors.get(cursor) if self._cursors else None
-            if state is None:
-                raise UpstreamError("Halaman berikutnya kedaluwarsa, klik Scrape ulang")
+        if state is not None:
             try:
                 iterator.thaw(instaloader.FrozenNodeIterator(**state))
             except InvalidArgumentException as exc:
@@ -568,67 +635,57 @@ class InstagramSource:
             self._media_cache.put_many(to_cache)
         next_cursor = None
         if self._cursors is not None and iterator.total_index < profile.mediacount:
-            next_cursor = self._cursors.put(iterator.freeze()._asdict())
+            mode = "anon" if self._active_key == ANON_BUDGET_KEY else "session"
+            next_cursor = self._cursors.put({"mode": mode, **iterator.freeze()._asdict()})
 
-        stories: list[Post] = []
-        status: StoriesStatus = "none"
-        if not cursor:
-            stories, status = self._fetch_stories(profile.userid)
         # Pinned posts come first from instaloader, so re-sort the page by date.
         posts.sort(key=lambda post: post.created_at, reverse=True)
         snapshot = None
-        if not cursor:
+        if state is None:
             # Same numbers a probe would fetch, already in hand: no extra query for the baseline.
             snapshot = ProfileProbe(
                 avatar_url=profile.profile_pic_url_no_iphone or "",
                 post_count=profile.mediacount,
-                latest_story_at=max((story.created_at for story in stories), default=None),
+                latest_story_at=None,
             )
         return FeedPage(
-            posts=stories + posts,
+            posts=posts,
             next_cursor=next_cursor,
-            stories_status=status,
+            stories_status="on_demand" if self._include_stories else "none",
             snapshot=snapshot,
         )
 
-    def _fetch_stories(self, user_id: int) -> tuple[list[Post], StoriesStatus]:
+    async def fetch_stories(self, username: str) -> tuple[StoriesStatus, list[Post]]:
+        """Active stories, only when asked: the story query is the one Instagram watches most."""
+        await self._sync()
         if not self._include_stories or not self._loader.context.is_logged_in:
-            return [], "login_required"
-        try:
-            raw_items = [
-                item
-                for story in self._loader.get_stories(userids=[user_id])
-                for item in story.get_items()
-            ]
-            items = [map_instagram_story_item(item) for item in raw_items]
-            self._cache_story_items(raw_items)
-        except TooManyRequestsException:
-            raise
-        except ConnectionException as exc:
-            # Stories are a bonus, so a failure here should not drop the posts.
-            logger.warning("instagram stories fetch failed for %s: %s", user_id, exc)
-            return [], "none"
-        logger.info("instagram user %s has %d active story items", user_id, len(items))
-        return items, "available" if items else "none"
+            return "login_required", []
+        return await self._run(lambda: self._fetch_stories_sync(username), cost=2)
+
+    def _fetch_stories_sync(self, username: str) -> tuple[StoriesStatus, list[Post]]:
+        profile = self._profile(username)
+        raw_items = [
+            item
+            for story in self._active_loader.get_stories(userids=[profile.userid])
+            for item in story.get_items()
+        ]
+        self._cache_story_items(raw_items)
+        items = [map_instagram_story_item(item) for item in raw_items]
+        logger.info("instagram user %s has %d active story items", username, len(items))
+        return ("available" if items else "none"), items
 
     async def probe(self, username: str) -> ProfileProbe:
-        await self._sync()
-        logged_in = self._loader.context.is_logged_in
-        return await self._run(lambda: self._probe_sync(username), cost=2 if logged_in else 1)
+        """Post count and avatar, logged out: one request, nothing on the account."""
+        return await self._public(lambda: self._probe_sync(username), cost=1)
 
     def _probe_sync(self, username: str) -> ProfileProbe:
         profile = self._profile(username)
-        latest_story_at = None
-        if self._include_stories and self._loader.context.is_logged_in:
-            # Story.latest_media_utc comes with the reel list, so no per item requests.
-            stories = list(self._loader.get_stories(userids=[profile.userid]))
-            if stories:
-                latest_story_at = max(_as_utc(story.latest_media_utc) for story in stories)
         return ProfileProbe(
             # The plain property fetches an extra iPhone endpoint when logged in.
             avatar_url=profile.profile_pic_url_no_iphone or "",
             post_count=profile.mediacount,
-            latest_story_at=latest_story_at,
+            # Stories are not checked anymore, they load on demand.
+            latest_story_at=None,
         )
 
     async def fetch_reels(
@@ -686,7 +743,9 @@ class InstagramSource:
 
     def _list_highlights_sync(self, username: str) -> tuple[str, list[Highlight]]:
         profile = self._profile(username)
-        highlights = [_to_highlight(item) for item in self._loader.get_highlights(profile.userid)]
+        highlights = [
+            _to_highlight(item) for item in self._active_loader.get_highlights(profile.userid)
+        ]
         return ("available" if highlights else "none"), highlights
 
     async def highlight_items(self, username: str, highlight_id: str) -> list[Post]:
@@ -697,7 +756,7 @@ class InstagramSource:
 
     def _highlight_items_sync(self, username: str, highlight_id: str) -> list[Post]:
         profile = self._profile(username)
-        for highlight in self._loader.get_highlights(profile.userid):
+        for highlight in self._active_loader.get_highlights(profile.userid):
             if str(highlight.unique_id) == highlight_id:
                 raw_items = list(highlight.get_items())
                 self._cache_story_items(raw_items)
@@ -712,13 +771,13 @@ class InstagramSource:
         """
         profile = self._profile(username)
         wanted = int(post_id.removeprefix(STORY_ID_PREFIX))
-        for story in self._loader.get_stories(userids=[profile.userid]):
+        for story in self._active_loader.get_stories(userids=[profile.userid]):
             items = list(story.get_items())
             self._cache_story_items(items)
             for item in items:
                 if item.mediaid == wanted:
                     return _story_media(item)
-        for highlight in self._loader.get_highlights(profile.userid):
+        for highlight in self._active_loader.get_highlights(profile.userid):
             items = list(highlight.get_items())
             self._cache_story_items(items)
             for item in items:
@@ -754,14 +813,13 @@ class InstagramSource:
                 await asyncio.to_thread(self._media_cache.forget, post_id)
             elif cached := await asyncio.to_thread(self._media_cache.get, post_id):
                 return _resolved(post_id, username, cached, from_cache=True)
-        is_story = post_id.startswith(STORY_ID_PREFIX)
-        # A story lookup lists the profile, its stories and maybe its highlights.
-        return await self._run(
-            lambda: self._resolve_media_sync(username, post_id), cost=3 if is_story else 1
-        )
+        if post_id.startswith(STORY_ID_PREFIX):
+            # A story lookup lists the profile, its stories and maybe its highlights.
+            return await self._run(lambda: self._resolve_media_sync(username, post_id), cost=3)
+        return await self._public(lambda: self._resolve_media_sync(username, post_id), cost=1)
 
     def _resolve_media_sync(self, username: str, post_id: str) -> ResolvedPost:
-        context = self._loader.context
+        context = self._active_loader.context
         if post_id.startswith(STORY_ID_PREFIX):
             if not context.is_logged_in:
                 raise PrivateAccountError("Download story butuh session Instagram")

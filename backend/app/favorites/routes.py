@@ -147,7 +147,7 @@ async def check_now(
     redis: RedisClient, queue: Annotated[ArqRedis, Depends(get_queue)]
 ) -> CheckResponse:
     # Fixed job id: arq ignores the enqueue while the same check is queued or running.
-    await queue.enqueue_job("check_favorites", _job_id=service.CHECK_JOB_ID)
+    await queue.enqueue_job("check_favorites", True, _job_id=service.CHECK_JOB_ID)
     try:
         await redis.set(service.CHECKING_KEY, "1", ex=service.CHECKING_TTL_SECONDS)
     except RedisError as exc:

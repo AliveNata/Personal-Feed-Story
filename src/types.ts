@@ -6,7 +6,8 @@ export interface MediaSlide {
   posterUrl: string | null;
 }
 
-export type StoriesStatus = 'available' | 'none' | 'login_required' | 'not_supported';
+// on_demand: Instagram stories load with their own request when asked.
+export type StoriesStatus = 'available' | 'none' | 'login_required' | 'not_supported' | 'on_demand';
 
 export interface RateInfo {
   used: number;
@@ -175,4 +176,12 @@ export interface PlatformSessionStatus {
   // Set when the cookie should be replaced: rejected, or limited again and again.
   replaceReason: string | null;
   problemSince: string | null;
+}
+
+export interface StoriesResponse {
+  status: 'available' | 'none' | 'login_required';
+  items: Post[];
+  cached: boolean;
+  fetchedAt: string | null;
+  rate: RateInfo | null;
 }

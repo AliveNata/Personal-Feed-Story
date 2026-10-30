@@ -49,7 +49,8 @@ class Post(CamelModel):
     media: list[MediaSlide] = []
 
 
-StoriesStatus = Literal["available", "none", "login_required", "not_supported"]
+# on_demand: Instagram stories are loaded with their own request, see /api/instagram/stories.
+StoriesStatus = Literal["available", "none", "login_required", "not_supported", "on_demand"]
 
 
 class FeedPage(CamelModel):
@@ -109,6 +110,14 @@ class ReelsResponse(CamelModel):
     reels: list[Post]
     next_cursor: str | None = None
     cached: bool = False
+    rate: RateInfo | None = None
+
+
+class StoriesResponse(CamelModel):
+    status: Literal["available", "none", "login_required"]
+    items: list[Post]
+    cached: bool = False
+    fetched_at: datetime | None = None
     rate: RateInfo | None = None
 
 

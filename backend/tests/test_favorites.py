@@ -276,3 +276,45 @@ async def test_check_now_enqueues_fixed_job_and_flags_checking(client: httpx.Asy
     assert response.status_code == 202
     assert app.state.queue.jobs == [("check_favorites", service.CHECK_JOB_ID)]
     assert listing["checking"] is True
+
+
+@requires_db
+async def test_check_all_skips_recently_checked_platform_accounts(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Arrange
+    recent = datetime.now(UTC) - timedelta(hours=1)
+    async with session_factory() as db:
+        db.add_all(
+            [
+                Favorite(
+                    platform="instagram",
+                    username="ig",
+                    checked_at=recent,
+                    post_count=1,
+                    seen_post_count=1,
+                ),
+                Favorite(
+                    platform="tiktok",
+                    username="tt",
+                    checked_at=recent,
+                    post_count=1,
+                    seen_post_count=1,
+                ),
+            ]
+        )
+        await db.commit()
+    instagram, tiktok = FakeProber(probe(posts=2)), FakeProber(probe(posts=2))
+
+    # Act
+    await service.check_all(
+        session_factory,
+        {"instagram": instagram, "tiktok": tiktok},
+        make_budget(),
+        {},
+        sleep=no_sleep,
+        min_interval={"instagram": timedelta(hours=6)},
+    )
+
+    # Assert
+    assert (instagram.calls, tiktok.calls) == ([], ["tt"])

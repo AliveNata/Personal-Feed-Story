@@ -1,4 +1,5 @@
 import {
+  StoriesResponse,
   PlatformSessionStatus,
   ActivityResponse,
   DownloadJob,
@@ -277,3 +278,9 @@ export const savePlatformSession = (platform: Platform, cookie: string): Promise
 
 export const deletePlatformSession = (platform: Platform): Promise<PlatformSessionStatus> =>
   request<PlatformSessionStatus>(`/api/platform-sessions/${platform}`, { method: 'DELETE' });
+
+export const fetchStories = (username: string, refresh = false): Promise<StoriesResponse> => {
+  const params = new URLSearchParams({ username });
+  if (refresh) params.set('refresh', 'true');
+  return request<StoriesResponse>(`/api/instagram/stories?${params.toString()}`);
+};
