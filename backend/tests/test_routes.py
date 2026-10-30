@@ -443,3 +443,24 @@ async def test_archive_upload_queues_an_import_and_reports_its_state(
     assert app.state.queue.jobs[-1] == queued.json()["importId"]
     assert wrong_type.status_code == 415
     assert (state.json()["status"], state.json()["filename"]) == ("queued", "foto.zip")
+
+
+async def test_create_folder_manually_and_refuse_duplicate_names(
+    client: httpx.AsyncClient,
+) -> None:
+    # Arrange
+    await login(client)
+
+    # Act
+    created = await client.post("/api/folders", json={"name": "  Liburan   Bali "})
+    duplicate = await client.post("/api/folders", json={"name": "liburan bali"})
+    blank = await client.post("/api/folders", json={"name": "   "})
+    history = (await client.get("/api/activity")).json()["events"]
+
+    # Assert
+    assert created.status_code == 201
+    assert (created.json()["name"], created.json()["photoCount"]) == ("Liburan Bali", 0)
+    assert duplicate.status_code == 409
+    assert "sudah ada" in duplicate.json()["detail"]
+    assert blank.status_code == 422
+    assert history[0]["action"] == "create_folder"

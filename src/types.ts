@@ -145,7 +145,7 @@ export interface FavoritesResponse {
   checking: boolean;
 }
 
-export type LibraryAction = 'download' | 'upload' | 'move' | 'delete_item' | 'delete_folder';
+export type LibraryAction = 'download' | 'upload' | 'move' | 'delete_item' | 'delete_folder' | 'create_folder';
 
 export interface LibraryEvent {
   id: number;

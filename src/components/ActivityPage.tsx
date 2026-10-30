@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowRight, Download, FolderX, MoveRight, Trash2, Upload } from 'lucide-react';
+import { ArrowRight, Download, FolderPlus, FolderX, MoveRight, Trash2, Upload } from 'lucide-react';
 import { LibraryAction, LibraryEvent } from '../types';
 import { ApiError, fetchActivity } from '../utils/api';
 import { Panel, focusRing, primaryButton, secondaryButton } from './ui';
@@ -17,6 +17,7 @@ const ACTION_ICONS: Record<LibraryAction, React.FC<{ className?: string }>> = {
   move: MoveRight,
   delete_item: Trash2,
   delete_folder: FolderX,
+  create_folder: FolderPlus,
 };
 
 const ACTION_LABELS: Record<LibraryAction, string> = {
@@ -25,6 +26,7 @@ const ACTION_LABELS: Record<LibraryAction, string> = {
   move: 'Pindah',
   delete_item: 'Hapus file',
   delete_folder: 'Hapus folder',
+  create_folder: 'Folder baru',
 };
 
 const timeFormat = new Intl.DateTimeFormat('id', { dateStyle: 'medium', timeStyle: 'short' });
@@ -63,6 +65,8 @@ const Summary: React.FC<{ event: LibraryEvent }> = ({ event }) => {
           {files} dihapus dari {folder}
         </>
       );
+    case 'create_folder':
+      return <>Folder {folder} dibuat</>;
     case 'delete_folder':
       return (
         <>

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Folder } from '../types';
 import { ApiError, deleteFolder, fetchFolders, formatBytes } from '../utils/api';
 import FolderBackdrop from './FolderBackdrop';
+import NewFolderForm from './NewFolderForm';
 import UploadDialog from './UploadDialog';
 import { ConfirmDelete, Panel, focusRing, primaryButton, secondaryButton } from './ui';
 
@@ -14,6 +15,7 @@ const dateFormat = new Intl.DateTimeFormat('id', { dateStyle: 'medium' });
 const LibraryPage: React.FC = () => {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [uploadTarget, setUploadTarget] = useState<Folder | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
 
   const load = useCallback((silent = false) => {
     if (!silent) setState({ status: 'loading' });
@@ -43,10 +45,32 @@ const LibraryPage: React.FC = () => {
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Library</h1>
-        <Link to="/library/activity" className={`inline-flex items-center ${secondaryButton}`}>
-          Riwayat
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link to="/library/activity" className={`inline-flex items-center ${secondaryButton}`}>
+            Riwayat
+          </Link>
+          {!isCreating && (
+            <button type="button" className={primaryButton} onClick={() => setIsCreating(true)}>
+              Folder baru
+            </button>
+          )}
+        </div>
       </div>
+
+      {isCreating && (
+        <NewFolderForm
+          onCancel={() => setIsCreating(false)}
+          onCreated={(folder) => {
+            setIsCreating(false);
+            // Newest first, like the list the server returns.
+            setState((previous) =>
+              previous.status === 'ready'
+                ? { status: 'ready', folders: [folder, ...previous.folders] }
+                : previous,
+            );
+          }}
+        />
+      )}
 
       {state.status === 'loading' && (
         <Panel role="status">

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFil
 from fastapi.responses import FileResponse
 from pydantic import Field, field_validator
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_db, get_redis, require_user
@@ -176,6 +176,32 @@ async def get_job(
     if job.status == "running":
         response.current_post_id, response.current_percent = await read_progress(redis, job_id)
     return response
+
+
+class CreateFolderRequest(CamelModel):
+    name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, value: str) -> str:
+        clean = service.normalize_folder_name(value)
+        if not clean:
+            raise ValueError("Nama folder tidak boleh kosong")
+        return clean
+
+
+@router.post("/folders", response_model=FolderResponse, status_code=201)
+async def create_folder(body: CreateFolderRequest, db: DbSession) -> FolderResponse:
+    existing = await db.scalar(select(Folder).where(func.lower(Folder.name) == body.name.lower()))
+    if existing is not None:
+        # Names are unique without case, "bali" would silently reuse "Bali" otherwise.
+        raise HTTPException(status_code=409, detail=f'Folder "{existing.name}" sudah ada')
+    folder = await service.get_or_create_folder(db, body.name)
+    events.record(db, "create_folder", folder, 0)
+    await db.commit()
+    summary = await service.get_folder_summary(db, folder.id)
+    assert summary is not None
+    return _folder_response(summary)
 
 
 @router.get("/folders", response_model=list[FolderResponse])
@@ -433,7 +459,7 @@ async def lookup_downloaded(
 class LibraryEventResponse(CamelModel):
     id: int
     created_at: datetime
-    action: Literal["download", "upload", "move", "delete_item", "delete_folder"]
+    action: Literal["download", "upload", "move", "delete_item", "delete_folder", "create_folder"]
     item_count: int
     folder_id: int | None
     folder_name: str

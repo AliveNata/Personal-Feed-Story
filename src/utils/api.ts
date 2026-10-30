@@ -108,6 +108,9 @@ export const fetchJob = (jobId: string): Promise<DownloadJob> =>
 
 export const fetchFolders = (): Promise<Folder[]> => request<Folder[]>('/api/folders');
 
+export const createFolder = (name: string): Promise<Folder> =>
+  request<Folder>('/api/folders', { method: 'POST', json: { name } });
+
 export const fetchFolder = (folderId: number): Promise<Folder> => request<Folder>(`/api/folders/${folderId}`);
 
 export const fetchFolderItems = (
