@@ -51,6 +51,7 @@ class FavoriteResponse(CamelModel):
     username: str
     avatar_url: str | None
     updates: list[service.UpdateKind]
+    new_post_count: int
     checked_at: datetime | None
     check_error: str | None
 
@@ -71,6 +72,7 @@ def to_response(favorite: Favorite) -> FavoriteResponse:
         username=favorite.username,
         avatar_url=proxied_media_url(favorite.avatar_url or "") or None,
         updates=service.update_kinds(favorite),
+        new_post_count=service.new_post_count(favorite),
         checked_at=favorite.checked_at,
         check_error=favorite.check_error,
     )

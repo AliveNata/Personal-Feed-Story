@@ -98,6 +98,18 @@ def test_story_posted_before_visit_is_not_an_update_on_next_probe() -> None:
     assert service.update_kinds(favorite) == []
 
 
+def test_new_post_count_counts_posts_since_last_visit() -> None:
+    # Arrange
+    favorite = Favorite(platform="instagram", username="natgeo")
+    service.apply_probe(favorite, probe(posts=10), NOW)
+
+    # Act
+    service.apply_probe(favorite, probe(posts=13), NOW + timedelta(hours=6))
+
+    # Assert
+    assert service.new_post_count(favorite) == 3
+
+
 def test_deleted_post_is_not_an_update() -> None:
     # Arrange
     favorite = Favorite(platform="tiktok", username="someone")
@@ -108,6 +120,7 @@ def test_deleted_post_is_not_an_update() -> None:
 
     # Assert
     assert service.update_kinds(favorite) == []
+    assert service.new_post_count(favorite) == 0
 
 
 @requires_db
@@ -257,13 +270,15 @@ async def test_seen_clears_update_and_delete_removes(
         await db.commit()
 
     # Act
-    before = (await client.get("/api/favorites")).json()["favorites"][0]["updates"]
-    seen = (await client.post(f"/api/favorites/{favorite_id}/seen")).json()["updates"]
+    before = (await client.get("/api/favorites")).json()["favorites"][0]
+    seen = (await client.post(f"/api/favorites/{favorite_id}/seen")).json()
     deleted = await client.delete(f"/api/favorites/{favorite_id}")
     after = (await client.get("/api/favorites")).json()["favorites"]
 
     # Assert
-    assert (before, seen, deleted.status_code, after) == (["post"], [], 204, [])
+    assert (before["updates"], before["newPostCount"]) == (["post"], 1)
+    assert (seen["updates"], seen["newPostCount"]) == ([], 0)
+    assert (deleted.status_code, after) == (204, [])
 
 
 @requires_db

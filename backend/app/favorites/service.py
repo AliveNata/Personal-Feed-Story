@@ -30,6 +30,13 @@ CHECK_BUDGET_SHARE = 0.7
 PROBE_COST = 2
 
 
+def new_post_count(favorite: Favorite) -> int:
+    """Posts added since the account was last opened. Deleted posts can push it below zero."""
+    if favorite.post_count is None or favorite.seen_post_count is None:
+        return 0
+    return max(0, favorite.post_count - favorite.seen_post_count)
+
+
 def update_kinds(favorite: Favorite) -> list[UpdateKind]:
     kinds: list[UpdateKind] = []
     if (

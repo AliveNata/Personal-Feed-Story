@@ -1,13 +1,14 @@
-export type Platform = 'instagram' | 'tiktok';
+export type Platform = "instagram" | "tiktok";
 
 export interface MediaSlide {
-  type: 'photo' | 'video';
+  type: "photo" | "video";
   url: string;
   posterUrl: string | null;
 }
 
 // on_demand: Instagram stories load with their own request when asked.
-export type StoriesStatus = 'available' | 'none' | 'login_required' | 'not_supported' | 'on_demand';
+export type StoriesStatus =
+  "available" | "none" | "login_required" | "not_supported" | "on_demand";
 
 export interface RateInfo {
   used: number;
@@ -58,13 +59,13 @@ export interface Highlight {
 }
 
 export interface HighlightsResponse {
-  status: 'available' | 'none' | 'login_required';
+  status: "available" | "none" | "login_required";
   highlights: Highlight[];
   rate: RateInfo | null;
 }
 
 export interface ReelsResponse {
-  status: 'available' | 'none' | 'login_required';
+  status: "available" | "none" | "login_required";
   reels: Post[];
   nextCursor: string | null;
   cached: boolean;
@@ -80,8 +81,8 @@ export interface User {
   username: string;
 }
 
-export type MediaType = 'photo' | 'video';
-export type JobStatus = 'queued' | 'running' | 'done' | 'failed';
+export type MediaType = "photo" | "video";
+export type JobStatus = "queued" | "running" | "done" | "failed";
 
 export interface DownloadJob {
   id: string;
@@ -98,7 +99,7 @@ export interface DownloadJob {
   currentPercent: number | null;
 }
 
-export type MediaSource = 'post' | 'story' | 'upload';
+export type MediaSource = "post" | "story" | "upload";
 
 export interface Folder {
   id: number;
@@ -115,7 +116,7 @@ export interface Folder {
 export interface MediaItem {
   id: number;
   mediaType: MediaType;
-  platform: Platform | 'upload';
+  platform: Platform | "upload";
   authorUsername: string;
   sourcePostId: string;
   itemIndex: number;
@@ -128,7 +129,7 @@ export interface MediaItem {
   thumbnailUrl: string | null;
 }
 
-export type FavoriteUpdate = 'post' | 'story';
+export type FavoriteUpdate = "post" | "story";
 
 export interface Favorite {
   id: number;
@@ -136,6 +137,7 @@ export interface Favorite {
   username: string;
   avatarUrl: string | null;
   updates: FavoriteUpdate[];
+  newPostCount: number;
   checkedAt: string | null;
   checkError: string | null;
 }
@@ -145,7 +147,13 @@ export interface FavoritesResponse {
   checking: boolean;
 }
 
-export type LibraryAction = 'download' | 'upload' | 'move' | 'delete_item' | 'delete_folder' | 'create_folder';
+export type LibraryAction =
+  | "download"
+  | "upload"
+  | "move"
+  | "delete_item"
+  | "delete_folder"
+  | "create_folder";
 
 export interface LibraryEvent {
   id: number;
@@ -168,7 +176,7 @@ export interface ActivityResponse {
 
 export interface PlatformSessionStatus {
   platform: Platform;
-  source: 'web' | 'env' | 'none';
+  source: "web" | "env" | "none";
   accountName: string | null;
   verified: boolean;
   updatedAt: string | null;
@@ -179,7 +187,7 @@ export interface PlatformSessionStatus {
 }
 
 export interface StoriesResponse {
-  status: 'available' | 'none' | 'login_required';
+  status: "available" | "none" | "login_required";
   items: Post[];
   cached: boolean;
   fetchedAt: string | null;
