@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from itertools import islice
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
+from urllib.parse import unquote
 
 import instaloader
 from instaloader.exceptions import (
@@ -870,34 +871,53 @@ class InstagramSource:
         )
 
 
-# instaloader's "who am I" query, the same one its test_login uses.
-WHOAMI_QUERY_HASH = "d6f4427fbe92d846298cf93df0b937d3"
+def _fetch_own_user(loader: instaloader.Instaloader, user_id: str) -> dict[str, Any]:
+    """The logged in user through the i.instagram.com API, the route stories already use.
+
+    instaloader's own test_login uses an old GraphQL query hash that Instagram now answers
+    with 400 "feedback_required" even for a good cookie, so it cannot tell good from bad.
+    """
+    data = loader.context.get_iphone_json(f"api/v1/users/{user_id}/info/", {})
+    user = data.get("user")
+    return user if isinstance(user, dict) else {}
 
 
-def validate_instagram_cookie(raw_cookie: str) -> tuple[str, bool]:
+def _session_user_id(cookies: dict[str, str]) -> str:
+    # The sessionid starts with the user id ("123%3Aabc..."), in case ds_user_id was not copied.
+    user_id = cookies.get("ds_user_id") or unquote(cookies["sessionid"]).split(":", 1)[0]
+    if not user_id.isdigit():
+        raise InvalidSessionError("Cookie ini tidak lengkap. Ambil ulang seluruh header Cookie")
+    return user_id
+
+
+def validate_instagram_cookie(
+    raw_cookie: str,
+    fetch_user: Callable[[instaloader.Instaloader, str], dict[str, Any]] = _fetch_own_user,
+) -> tuple[str, bool]:
     """(account name, verified) for a pasted Cookie header. One Instagram query.
 
-    When Instagram only says "slow down" the cookie may still be fine, so it is accepted
-    unverified, named after its user id. A rejected or logged out cookie raises.
+    When Instagram only limits the account (rate limit, "feedback_required") the cookie itself
+    may still be fine, so it is accepted unverified, named after its user id. Only an answer
+    that says the session is logged out rejects it.
     """
     cookies = parse_cookie_header(raw_cookie)
     if not cookies.get("sessionid"):
         raise InvalidSessionError(
             "Cookie ini tidak punya sessionid. Ambil dari tab instagram.com yang sedang login"
         )
+    user_id = _session_user_id(cookies)
     loader = build_loader("", None)
     loader.load_session("", cookies)
     try:
-        data = loader.context.graphql_query(WHOAMI_QUERY_HASH, {})
+        user = fetch_user(loader, user_id)
     except (ConnectionException, AbortDownloadException) as exc:
-        if _is_throttle(exc):
-            logger.warning("instagram throttled the session check, saving unverified")
-            return f"user id {cookies.get('ds_user_id', '?')}", False
+        if _is_throttle(exc) or "feedback_required" in str(exc).lower():
+            logger.warning("instagram limited the session check, saving unverified: %s", exc)
+            return f"user id {user_id}", False
         logger.warning("instagram rejected the pasted session: %s", exc)
         raise InvalidSessionError(
             "Instagram menolak cookie ini. Login ulang lalu ambil lagi"
         ) from exc
-    user = (data.get("data") or {}).get("user")
-    if not user or not user.get("username"):
+    if not user.get("username"):
         raise InvalidSessionError("Cookie ini sudah logout atau kedaluwarsa. Ambil cookie baru")
     return str(user["username"]), True

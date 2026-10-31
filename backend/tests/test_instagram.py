@@ -388,6 +388,47 @@ def test_pasted_instagram_cookie_needs_a_sessionid() -> None:
         validate_instagram_cookie("csrftoken=abc; mid=xyz")
 
 
+COOKIE = "csrftoken=abc; sessionid=4330148204%3AxYz%3A19%3Aabc; mid=xyz"
+
+
+def test_pasted_instagram_cookie_is_checked_through_the_user_info_api() -> None:
+    # Arrange
+    seen: list[str] = []
+
+    def fetch_user(_loader: object, user_id: str) -> dict[str, str]:
+        seen.append(user_id)
+        return {"username": "erenyaan"}
+
+    # Act
+    result = validate_instagram_cookie(COOKIE, fetch_user)  # type: ignore[arg-type]
+
+    # Assert
+    assert result == ("erenyaan", True)
+    assert seen == ["4330148204"]  # taken from the sessionid when ds_user_id is missing
+
+
+def test_feedback_required_on_the_check_saves_the_cookie_unverified() -> None:
+    # Arrange
+    def limited(_loader: object, _user_id: str) -> dict[str, str]:
+        raise ConnectionException('400 Bad Request - "fail" status, message "feedback_required"')
+
+    # Act
+    result = validate_instagram_cookie(COOKIE, limited)  # type: ignore[arg-type]
+
+    # Assert
+    assert result == ("user id 4330148204", False)
+
+
+def test_logged_out_answer_on_the_check_rejects_the_cookie() -> None:
+    # Arrange
+    def logged_out(_loader: object, _user_id: str) -> dict[str, str]:
+        raise ConnectionException('403 Forbidden - "fail" status, message "login_required"')
+
+    # Act / Assert
+    with pytest.raises(InvalidSessionError):
+        validate_instagram_cookie(COOKIE, logged_out)  # type: ignore[arg-type]
+
+
 def test_401_marks_the_session_for_replacement_and_a_success_clears_it() -> None:
     # Arrange
     budget = RateBudget(fakeredis.FakeRedis(), {"instagram": (100, 900)})
