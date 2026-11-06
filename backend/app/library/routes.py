@@ -336,7 +336,7 @@ async def upload_file(
         )
     try:
         uploaded = await storage.save_upload(
-            file.read, content_type, get_settings().max_download_bytes
+            file.read, content_type, get_settings().max_upload_bytes
         )
     except DownloadError as exc:
         raise HTTPException(status_code=422, detail=f"{filename}: {exc}") from exc

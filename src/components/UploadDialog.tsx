@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Upload, X } from 'lucide-react';
-import { MediaType } from '../types';
+import React, { useEffect, useRef, useState } from "react";
+import { Upload, X } from "lucide-react";
+import { MediaType } from "../types";
 import {
   ApiError,
   ArchiveImport,
@@ -8,8 +8,8 @@ import {
   formatBytes,
   uploadArchive,
   uploadFile,
-} from '../utils/api';
-import { focusRing, primaryButton, secondaryButton } from './ui';
+} from "../utils/api";
+import { focusRing, primaryButton, secondaryButton } from "./ui";
 
 interface UploadDialogProps {
   folderId: number;
@@ -18,8 +18,15 @@ interface UploadDialogProps {
   onUploaded: () => void;
 }
 
-type EntryStatus = 'pending' | 'uploading' | 'processing' | 'saved' | 'skipped' | 'failed' | 'unsupported';
-type EntryKind = MediaType | 'archive';
+type EntryStatus =
+  | "pending"
+  | "uploading"
+  | "processing"
+  | "saved"
+  | "skipped"
+  | "failed"
+  | "unsupported";
+type EntryKind = MediaType | "archive";
 
 interface Entry {
   key: string;
@@ -32,29 +39,34 @@ interface Entry {
 
 // Same list the backend accepts. Extension first, because some browsers send an empty
 // MIME type for formats like .heic.
-const PHOTO_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'heic', 'avif'];
-const VIDEO_EXTENSIONS = ['mp4', 'm4v', 'mov', 'webm'];
+const PHOTO_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "heic", "avif"];
+const VIDEO_EXTENSIONS = ["mp4", "m4v", "mov", "webm"];
 // Unpacked on the server: photos and videos inside, at any depth, go into this folder.
-const ARCHIVE_EXTENSIONS = ['zip', 'rar'];
+const ARCHIVE_EXTENSIONS = ["zip", "rar"];
 const ACCEPT = [...PHOTO_EXTENSIONS, ...VIDEO_EXTENSIONS, ...ARCHIVE_EXTENSIONS]
   .map((ext) => `.${ext}`)
-  .join(',');
+  .join(",");
 const ARCHIVE_POLL_MS = 1500;
-const KIND_LABELS: Record<EntryKind, string> = { photo: 'Foto', video: 'Video', archive: 'Arsip' };
+const KIND_LABELS: Record<EntryKind, string> = {
+  photo: "Foto",
+  video: "Video",
+  archive: "Arsip",
+};
 
 const detectType = (file: File): EntryKind | null => {
-  const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
-  if (PHOTO_EXTENSIONS.includes(extension)) return 'photo';
-  if (VIDEO_EXTENSIONS.includes(extension)) return 'video';
-  if (ARCHIVE_EXTENSIONS.includes(extension)) return 'archive';
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  if (PHOTO_EXTENSIONS.includes(extension)) return "photo";
+  if (VIDEO_EXTENSIONS.includes(extension)) return "video";
+  if (ARCHIVE_EXTENSIONS.includes(extension)) return "archive";
   return null;
 };
 
-const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+const sleep = (ms: number) =>
+  new Promise((resolve) => window.setTimeout(resolve, ms));
 
 const archiveProgress = (state: ArchiveImport): string => {
-  if (state.status === 'queued') return 'Menunggu antrian worker...';
-  if (state.status === 'unpacking') return 'Membuka arsip...';
+  if (state.status === "queued") return "Menunggu antrian worker...";
+  if (state.status === "unpacking") return "Membuka arsip...";
   return `Memasukkan file ${state.done}/${state.total}`;
 };
 
@@ -63,20 +75,25 @@ const archiveSummary = (state: ArchiveImport): string => {
   if (state.skipped) parts.push(`${state.skipped} sudah ada`);
   if (state.ignored) parts.push(`${state.ignored} bukan foto/video dilewati`);
   if (state.failed) parts.push(`${state.failed} gagal`);
-  return parts.join(', ');
+  return parts.join(", ");
 };
 
 const STATUS_TEXT: Record<EntryStatus, string> = {
-  pending: 'Siap',
-  uploading: 'Mengupload',
-  processing: 'Memproses arsip',
-  saved: 'Tersimpan',
-  skipped: 'Sudah ada, dilewati',
-  failed: 'Gagal',
-  unsupported: 'Bukan foto, video, zip, atau rar',
+  pending: "Siap",
+  uploading: "Mengupload",
+  processing: "Memproses arsip",
+  saved: "Tersimpan",
+  skipped: "Sudah ada, dilewati",
+  failed: "Gagal",
+  unsupported: "Bukan foto, video, zip, atau rar",
 };
 
-const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClose, onUploaded }) => {
+const UploadDialog: React.FC<UploadDialogProps> = ({
+  folderId,
+  folderName,
+  onClose,
+  onUploaded,
+}) => {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -96,7 +113,7 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
         key: `${file.name}-${file.size}-${file.lastModified}-${Math.random()}`,
         file,
         mediaType,
-        status: mediaType ? 'pending' : 'unsupported',
+        status: mediaType ? "pending" : "unsupported",
         progress: 0,
       };
     });
@@ -104,27 +121,44 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
   };
 
   const update = (key: string, patch: Partial<Entry>) =>
-    setEntries((previous) => previous.map((entry) => (entry.key === key ? { ...entry, ...patch } : entry)));
+    setEntries((previous) =>
+      previous.map((entry) =>
+        entry.key === key ? { ...entry, ...patch } : entry,
+      ),
+    );
 
-  const pending = entries.filter((entry) => entry.status === 'pending');
-  const photoCount = pending.filter((entry) => entry.mediaType === 'photo').length;
-  const archiveCount = pending.filter((entry) => entry.mediaType === 'archive').length;
+  const pending = entries.filter((entry) => entry.status === "pending");
+  const photoCount = pending.filter(
+    (entry) => entry.mediaType === "photo",
+  ).length;
+  const archiveCount = pending.filter(
+    (entry) => entry.mediaType === "archive",
+  ).length;
   const videoCount = pending.length - photoCount - archiveCount;
 
   const importArchive = async (entry: Entry): Promise<boolean> => {
-    let state = await uploadArchive(folderId, entry.file, (progress) => update(entry.key, { progress }));
-    update(entry.key, { status: 'processing', progress: 1, message: archiveProgress(state) });
-    while (state.status !== 'done' && state.status !== 'failed') {
+    let state = await uploadArchive(folderId, entry.file, (progress) =>
+      update(entry.key, { progress }),
+    );
+    update(entry.key, {
+      status: "processing",
+      progress: 1,
+      message: archiveProgress(state),
+    });
+    while (state.status !== "done" && state.status !== "failed") {
       await sleep(ARCHIVE_POLL_MS);
       state = await fetchArchiveImport(state.importId);
       update(entry.key, { message: archiveProgress(state) });
     }
-    if (state.status === 'failed') {
-      update(entry.key, { status: 'failed', message: state.error ?? 'Arsip gagal diproses' });
+    if (state.status === "failed") {
+      update(entry.key, {
+        status: "failed",
+        message: state.error ?? "Arsip gagal diproses",
+      });
       return false;
     }
     update(entry.key, {
-      status: state.saved ? 'saved' : 'skipped',
+      status: state.saved ? "saved" : "skipped",
       message: archiveSummary(state),
     });
     return state.saved > 0;
@@ -135,20 +169,22 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
     let savedAny = false;
     // One at a time: keeps progress readable and avoids hammering the disk with big videos.
     for (const entry of pending) {
-      update(entry.key, { status: 'uploading', progress: 0 });
+      update(entry.key, { status: "uploading", progress: 0 });
       try {
-        if (entry.mediaType === 'archive') {
+        if (entry.mediaType === "archive") {
           savedAny = (await importArchive(entry)) || savedAny;
           continue;
         }
-        const result = await uploadFile(folderId, entry.file, (progress) => update(entry.key, { progress }));
+        const result = await uploadFile(folderId, entry.file, (progress) =>
+          update(entry.key, { progress }),
+        );
         update(entry.key, { status: result.status, progress: 1 });
-        savedAny = savedAny || result.status === 'saved';
+        savedAny = savedAny || result.status === "saved";
       } catch (error) {
-        console.error('upload failed', entry.file.name, error);
+        console.error("upload failed", entry.file.name, error);
         update(entry.key, {
-          status: 'failed',
-          message: error instanceof ApiError ? error.message : 'Upload gagal',
+          status: "failed",
+          message: error instanceof ApiError ? error.message : "Upload gagal",
         });
       }
     }
@@ -177,7 +213,10 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
       className="w-[min(40rem,calc(100vw-2rem))] rounded-lg p-0 shadow-xl backdrop:bg-black/60"
     >
       <div className="flex items-center justify-between gap-3 border-b border-gray-200 p-4">
-        <h2 id="upload-title" className="text-lg font-bold text-gray-900 break-words">
+        <h2
+          id="upload-title"
+          className="text-lg font-bold text-gray-900 break-words"
+        >
           Tambah file ke "{folderName}"
         </h2>
         <button
@@ -200,11 +239,13 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
           onDragLeave={() => setIsDragging(false)}
           onDrop={handleDrop}
           className={`flex flex-col items-center gap-3 rounded-lg border-2 border-dashed p-6 text-center ${
-            isDragging ? 'border-gray-900 bg-gray-100' : 'border-gray-300'
+            isDragging ? "border-gray-900 bg-gray-100" : "border-gray-300"
           }`}
         >
           <Upload className="h-8 w-8 text-gray-700" aria-hidden="true" />
-          <p className="text-gray-800">Tarik foto, video, atau zip/rar ke sini</p>
+          <p className="text-gray-800">
+            Tarik foto, video, atau zip/rar ke sini
+          </p>
           <p className="text-sm text-gray-700">atau</p>
           <button
             type="button"
@@ -223,12 +264,13 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
             tabIndex={-1}
             onChange={(event) => {
               addFiles(event.target.files);
-              event.target.value = '';
+              event.target.value = "";
             }}
           />
           <p className="text-xs text-gray-700">
-            Foto: {PHOTO_EXTENSIONS.join(', ')}. Video: {VIDEO_EXTENSIONS.join(', ')}. Arsip: zip, rar (maks 2
-            GB), isinya foto dan video masuk ke folder ini.
+            Foto: {PHOTO_EXTENSIONS.join(", ")}. Video:{" "}
+            {VIDEO_EXTENSIONS.join(", ")} (maks 5 GB per file). Arsip: zip, rar
+            (maks 5 GB), isinya foto dan video masuk ke folder ini.
           </p>
         </div>
 
@@ -237,7 +279,10 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
             {entries.map((entry) => (
               <li key={entry.key} className="flex flex-col gap-1 p-3">
                 <div className="flex items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-sm text-gray-900" title={entry.file.name}>
+                  <span
+                    className="min-w-0 flex-1 truncate text-sm text-gray-900"
+                    title={entry.file.name}
+                  >
                     {entry.file.name}
                   </span>
                   {entry.mediaType && (
@@ -245,20 +290,22 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
                       {KIND_LABELS[entry.mediaType]}
                     </span>
                   )}
-                  <span className="shrink-0 text-xs text-gray-700">{formatBytes(entry.file.size)}</span>
+                  <span className="shrink-0 text-xs text-gray-700">
+                    {formatBytes(entry.file.size)}
+                  </span>
                 </div>
                 <p
                   className={`text-xs ${
-                    entry.status === 'failed' || entry.status === 'unsupported'
-                      ? 'text-red-700'
-                      : 'text-gray-700'
+                    entry.status === "failed" || entry.status === "unsupported"
+                      ? "text-red-700"
+                      : "text-gray-700"
                   }`}
                 >
-                  {entry.status === 'uploading'
+                  {entry.status === "uploading"
                     ? `${STATUS_TEXT.uploading} ${Math.round(entry.progress * 100)}%`
                     : (entry.message ?? STATUS_TEXT[entry.status])}
                 </p>
-                {entry.status === 'uploading' && (
+                {entry.status === "uploading" && (
                   <div
                     role="progressbar"
                     aria-label={`Progress ${entry.file.name}`}
@@ -267,7 +314,10 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
                     aria-valuemax={100}
                     className="h-1.5 overflow-hidden rounded bg-gray-200"
                   >
-                    <div className="h-full bg-gray-900" style={{ width: `${entry.progress * 100}%` }} />
+                    <div
+                      className="h-full bg-gray-900"
+                      style={{ width: `${entry.progress * 100}%` }}
+                    />
                   </div>
                 )}
               </li>
@@ -278,11 +328,16 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
         <div className="flex flex-wrap items-center justify-end gap-2">
           {pending.length > 0 && (
             <p className="mr-auto text-sm text-gray-700">
-              {photoCount} foto, {videoCount} video{archiveCount ? `, ${archiveCount} arsip` : ''}
+              {photoCount} foto, {videoCount} video
+              {archiveCount ? `, ${archiveCount} arsip` : ""}
             </p>
           )}
           {isDone ? (
-            <button type="button" className={primaryButton} onClick={() => dialogRef.current?.close()}>
+            <button
+              type="button"
+              className={primaryButton}
+              onClick={() => dialogRef.current?.close()}
+            >
               Selesai
             </button>
           ) : (
@@ -292,7 +347,11 @@ const UploadDialog: React.FC<UploadDialogProps> = ({ folderId, folderName, onClo
               onClick={startUpload}
               disabled={pending.length === 0 || isUploading}
             >
-              {isUploading ? 'Mengupload...' : pending.length ? `Upload ${pending.length} file` : 'Upload'}
+              {isUploading
+                ? "Mengupload..."
+                : pending.length
+                  ? `Upload ${pending.length} file`
+                  : "Upload"}
             </button>
           )}
         </div>
