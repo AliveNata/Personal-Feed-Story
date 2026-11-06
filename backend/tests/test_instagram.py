@@ -388,7 +388,7 @@ def test_pasted_instagram_cookie_needs_a_sessionid() -> None:
         validate_instagram_cookie("csrftoken=abc; mid=xyz")
 
 
-COOKIE = "csrftoken=abc; sessionid=4330148204%3AxYz%3A19%3Aabc; mid=xyz"
+COOKIE = "csrftoken=abc; sessionid=1234567890%3AxYz%3A19%3Aabc; mid=xyz"
 
 
 def test_pasted_instagram_cookie_is_checked_through_the_user_info_api() -> None:
@@ -404,7 +404,7 @@ def test_pasted_instagram_cookie_is_checked_through_the_user_info_api() -> None:
 
     # Assert
     assert result == ("erenyaan", True)
-    assert seen == ["4330148204"]  # taken from the sessionid when ds_user_id is missing
+    assert seen == ["1234567890"]  # taken from the sessionid when ds_user_id is missing
 
 
 def test_feedback_required_on_the_check_saves_the_cookie_unverified() -> None:
@@ -416,7 +416,7 @@ def test_feedback_required_on_the_check_saves_the_cookie_unverified() -> None:
     result = validate_instagram_cookie(COOKIE, limited)  # type: ignore[arg-type]
 
     # Assert
-    assert result == ("user id 4330148204", False)
+    assert result == ("user id 1234567890", False)
 
 
 def test_logged_out_answer_on_the_check_rejects_the_cookie() -> None:
