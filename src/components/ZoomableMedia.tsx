@@ -22,6 +22,9 @@ interface ZoomableMediaProps {
   onTogglePlay?: () => void;
   onToggleFullscreen?: () => void;
   seekFlash?: SeekFlash | null;
+  loop?: boolean;
+  autoPlay?: boolean;
+  onEnded?: () => void;
 }
 
 /**
@@ -35,6 +38,9 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
   alt,
   poster,
   videoRef,
+  loop = false,
+  autoPlay = false,
+  onEnded,
   zoom,
   setZoom,
   zoomAt,
@@ -176,6 +182,9 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
           src={src}
           poster={poster}
           controls={!isZoomed}
+          loop={loop}
+          autoPlay={autoPlay}
+          onEnded={onEnded}
           playsInline
           aria-label={alt}
           style={mediaStyle}

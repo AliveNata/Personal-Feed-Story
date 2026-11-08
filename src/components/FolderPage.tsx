@@ -341,6 +341,9 @@ const FolderPage: React.FC = () => {
           onClose={() => setViewerIndex(null)}
           onPrevious={viewerIndex > 0 ? () => setViewerIndex(viewerIndex - 1) : undefined}
           onNext={viewerIndex < readyItems.length - 1 ? () => setViewerIndex(viewerIndex + 1) : undefined}
+          onSlideshowNext={() =>
+            setViewerIndex((index) => (index === null ? null : (index + 1) % readyItems.length))
+          }
           onDelete={handleDeleteItem}
           currentFolderId={folderId}
           onMoved={(result, item) => handleMoved(result, [item.id])}

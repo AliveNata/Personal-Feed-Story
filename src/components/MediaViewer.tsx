@@ -6,12 +6,21 @@ import {
   Minimize2,
   Pause,
   Play,
+  Repeat,
   X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 import { MediaItem } from '../types';
 import { MoveResult, formatBytes } from '../utils/api';
+import {
+  SLIDESHOW_SPEEDS,
+  SlideshowSeconds,
+  readRepeatVideo,
+  readSlideshowSeconds,
+  saveRepeatVideo,
+  saveSlideshowSeconds,
+} from '../utils/viewerPrefs';
 import MoveForm from './MoveForm';
 import { ConfirmDelete, focusRing, secondaryButton } from './ui';
 import { SEEK_STEP_SECONDS, SeekFlash } from './VideoSeekZones';
@@ -27,6 +36,8 @@ interface MediaViewerProps {
   onClose: () => void;
   onPrevious?: () => void;
   onNext?: () => void;
+  // Slideshow step: like onNext, but wraps from the last file back to the first.
+  onSlideshowNext?: () => void;
   onDelete: (item: MediaItem) => Promise<void>;
   currentFolderId: number;
   onMoved: (result: MoveResult, item: MediaItem) => void;
@@ -47,6 +58,7 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
   onClose,
   onPrevious,
   onNext,
+  onSlideshowNext,
   onDelete,
   currentFolderId,
   onMoved,
@@ -76,6 +88,47 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
       video.removeEventListener('pause', sync);
     };
   }, [item.id]);
+
+  const [repeatVideo, setRepeatVideo] = useState(readRepeatVideo);
+  // Set when a video ends and the next one opens, so that one starts playing on its own.
+  const [continuePlaying, setContinuePlaying] = useState(false);
+
+  const toggleRepeat = () => {
+    setRepeatVideo((previous) => {
+      saveRepeatVideo(!previous);
+      return !previous;
+    });
+  };
+
+  const handleVideoEnded = () => {
+    // With repeat on the <video> loops by itself and never fires ended.
+    if (!onNext) return;
+    setContinuePlaying(true);
+    onNext();
+  };
+
+  const [isSlideshowOn, setIsSlideshowOn] = useState(false);
+  const [slideshowSeconds, setSlideshowSeconds] = useState<SlideshowSeconds>(readSlideshowSeconds);
+  const canSlideshow = !isVideo && total > 1 && onSlideshowNext !== undefined;
+  const isZoomed = zoom.scale > 1;
+
+  // The parent passes a new function every render, which must not restart the countdown.
+  const slideshowNextRef = useRef(onSlideshowNext);
+  slideshowNextRef.current = onSlideshowNext;
+
+  // One timer per photo: navigating by hand restarts the count, zooming in holds it.
+  useEffect(() => {
+    if (!isSlideshowOn || !canSlideshow || isZoomed) return;
+    const timer = window.setTimeout(() => slideshowNextRef.current?.(), slideshowSeconds * 1000);
+    return () => window.clearTimeout(timer);
+  }, [isSlideshowOn, canSlideshow, isZoomed, slideshowSeconds, item.id]);
+
+  const toggleSlideshow = () => setIsSlideshowOn((previous) => !previous);
+
+  const changeSlideshowSeconds = (seconds: SlideshowSeconds) => {
+    setSlideshowSeconds(seconds);
+    saveSlideshowSeconds(seconds);
+  };
 
   const [seekFlash, setSeekFlash] = useState<SeekFlash | null>(null);
   const lastSeek = useRef<{ side: SeekFlash['side']; seconds: number; at: number } | null>(null);
@@ -154,6 +207,11 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
           return;
         }
       }
+      if (!isVideo && canSlideshow && event.key === ' ') {
+        event.preventDefault();
+        toggleSlideshow();
+        return;
+      }
       // On a video, Shift plus an arrow moves between files.
       if (event.key === 'ArrowLeft' && onPrevious) onPrevious();
       if (event.key === 'ArrowRight' && onNext) onNext();
@@ -181,6 +239,50 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
             {position} / {total}
           </span>
           <div className="flex items-center gap-2">
+            {isVideo && (
+              <button
+                type="button"
+                onClick={toggleRepeat}
+                aria-pressed={repeatVideo}
+                aria-label="Ulangi video"
+                title={repeatVideo ? 'Ulangi video: nyala' : 'Ulangi video: mati, lanjut ke video berikutnya'}
+                className={`${navButton} ${repeatVideo ? '!bg-blue-600 !text-white' : ''}`}
+              >
+                <Repeat className="h-5 w-5" aria-hidden="true" />
+              </button>
+            )}
+            {canSlideshow && (
+              <>
+                <button
+                  type="button"
+                  onClick={toggleSlideshow}
+                  aria-pressed={isSlideshowOn}
+                  aria-label={isSlideshowOn ? 'Jeda slideshow' : 'Mulai slideshow'}
+                  className={`${navButton} ${isSlideshowOn ? '!bg-blue-600 !text-white' : ''}`}
+                >
+                  {isSlideshowOn ? (
+                    <Pause className="h-5 w-5" aria-hidden="true" />
+                  ) : (
+                    <Play className="h-5 w-5" aria-hidden="true" />
+                  )}
+                </button>
+                <label htmlFor="slideshow-speed" className="sr-only">
+                  Kecepatan slideshow
+                </label>
+                <select
+                  id="slideshow-speed"
+                  value={slideshowSeconds}
+                  onChange={(event) => changeSlideshowSeconds(Number(event.target.value) as SlideshowSeconds)}
+                  className={`h-11 rounded-full bg-white/90 px-3 text-sm text-gray-900 ${focusRing}`}
+                >
+                  {SLIDESHOW_SPEEDS.map((seconds) => (
+                    <option key={seconds} value={seconds}>
+                      {seconds} dtk
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
             {isVideo && zoom.scale > 1 && (
               <button
                 type="button"
@@ -195,7 +297,8 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
                 )}
               </button>
             )}
-            <>
+            {/* Phones pinch to zoom, so the buttons only take toolbar room there. */}
+            <div className="hidden items-center gap-2 sm:flex">
               <button
                 type="button"
                 onClick={() => zoomAt(1 / ZOOM_STEP)}
@@ -222,7 +325,7 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
               >
                 <ZoomIn className="h-5 w-5" aria-hidden="true" />
               </button>
-            </>
+            </div>
             <button
               type="button"
               onClick={toggleFullscreen}
@@ -250,6 +353,9 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
             alt={item.caption || `${isVideo ? 'Video' : 'Foto'} dari @${item.authorUsername}`}
             poster={item.thumbnailUrl ?? undefined}
             videoRef={videoRef}
+            loop={repeatVideo}
+            autoPlay={continuePlaying}
+            onEnded={handleVideoEnded}
             zoom={zoom}
             setZoom={setZoom}
             zoomAt={zoomAt}
@@ -293,7 +399,13 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
             // Phones get the tap zones, keyboards get the usual player keys.
             <p className="mt-1 hidden text-xs text-gray-700 md:block">
               Keyboard: ← → 5 detik, J L 10 detik, K atau Spasi putar/jeda, M bisu, F layar penuh, Shift + ← →
-              file lain. Klik 2x di kiri/kanan video juga bisa buat layar penuh.
+              file lain. Klik 2x di kiri/kanan video juga bisa buat layar penuh. Tombol ulang mati: habis
+              video langsung lanjut ke video berikutnya.
+            </p>
+          )}
+          {canSlideshow && (
+            <p className="mt-1 hidden text-xs text-gray-700 md:block">
+              Keyboard: Spasi mulai atau jeda slideshow, ← → foto lain.
             </p>
           )}
           <div className="mt-3 flex flex-wrap gap-2">
