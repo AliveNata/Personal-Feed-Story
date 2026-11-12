@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -87,6 +88,8 @@ class MediaItem(Base):
     permalink: Mapped[str | None] = mapped_column(Text, nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    # Clockwise display rotation in degrees. The file on disk is never rotated.
+    rotation: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
 
     folder: Mapped[Folder] = relationship(back_populates="items")
     blob: Mapped[Blob] = relationship(lazy="joined")

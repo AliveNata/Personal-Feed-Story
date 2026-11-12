@@ -7,12 +7,13 @@ import {
   Pause,
   Play,
   Repeat,
+  RotateCw,
   X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { MediaItem } from '../types';
-import { MoveResult, formatBytes } from '../utils/api';
+import { MediaItem, Rotation } from '../types';
+import { MoveResult, formatBytes, setItemRotation } from '../utils/api';
 import {
   SLIDESHOW_SPEEDS,
   SlideshowSeconds,
@@ -41,6 +42,8 @@ interface MediaViewerProps {
   onDelete: (item: MediaItem) => Promise<void>;
   currentFolderId: number;
   onMoved: (result: MoveResult, item: MediaItem) => void;
+  // The item changed in place, such as a new rotation.
+  onItemUpdated: (item: MediaItem) => void;
 }
 
 const SOURCE_LABELS: Record<MediaItem['platform'], string> = {
@@ -62,6 +65,7 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
   onDelete,
   currentFolderId,
   onMoved,
+  onItemUpdated,
 }) => {
   const dialogRef = useRef<HTMLDialogElement>(null);
   // Chrome refuses full screen on a <dialog> itself, so the content box inside goes full screen.
@@ -158,6 +162,20 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
   // A new file starts unzoomed.
   useEffect(() => reset(), [item.id, reset]);
 
+  // Saved right away and shown before the server answers, put back if saving fails.
+  const rotate = () => {
+    const previous = item;
+    const next = ((item.rotation + 90) % 360) as Rotation;
+    reset();
+    onItemUpdated({ ...item, rotation: next });
+    setItemRotation(item.id, next)
+      .then(onItemUpdated)
+      .catch((caught: unknown) => {
+        console.error('setItemRotation failed', caught);
+        onItemUpdated(previous);
+      });
+  };
+
   useEffect(() => {
     const sync = () => setIsFullscreen(document.fullscreenElement === stageRef.current);
     document.addEventListener('fullscreenchange', sync);
@@ -219,6 +237,7 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
       if (event.key === '+' || event.key === '=') zoomAt(ZOOM_STEP);
       if (event.key === '-') zoomAt(1 / ZOOM_STEP);
       if (event.key === '0') reset();
+      if (event.key === 'r') rotate();
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
@@ -328,6 +347,15 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
             </div>
             <button
               type="button"
+              onClick={rotate}
+              aria-label="Putar 90 derajat"
+              title="Putar 90 derajat searah jarum jam (R)"
+              className={navButton}
+            >
+              <RotateCw className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
               onClick={toggleFullscreen}
               aria-label={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
               aria-pressed={isFullscreen}
@@ -363,6 +391,7 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
             onTogglePlay={togglePlay}
             onToggleFullscreen={toggleFullscreen}
             seekFlash={seekFlash}
+            rotation={item.rotation}
           />
           <button
             type="button"

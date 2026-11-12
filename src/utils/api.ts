@@ -15,6 +15,7 @@ import {
   MediaSource,
   MediaType,
   Platform,
+  Rotation,
   User,
 } from '../types';
 
@@ -321,3 +322,6 @@ export const selectionDownloadUrl = (itemIds: number[], folderName: string): str
   const params = new URLSearchParams({ ids: itemIds.join(','), name: `${folderName} ${today}` });
   return `/api/items/zip?${params.toString()}`;
 };
+
+export const setItemRotation = (itemId: number, rotation: Rotation): Promise<MediaItem> =>
+  request<MediaItem>(`/api/items/${itemId}/rotation`, { method: 'PUT', json: { rotation } });

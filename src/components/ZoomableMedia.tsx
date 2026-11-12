@@ -1,4 +1,5 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Rotation } from '../types';
 import VideoSeekZones, { SeekFlash } from './VideoSeekZones';
 import { MAX_SCALE, MIN_SCALE, Point, ZoomState, clamp } from './zoom';
 
@@ -25,6 +26,7 @@ interface ZoomableMediaProps {
   loop?: boolean;
   autoPlay?: boolean;
   onEnded?: () => void;
+  rotation?: Rotation;
 }
 
 /**
@@ -41,6 +43,7 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
   loop = false,
   autoPlay = false,
   onEnded,
+  rotation = 0,
   zoom,
   setZoom,
   zoomAt,
@@ -54,6 +57,18 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
   const pointers = useRef(new Map<number, Point>());
   const pinchStart = useRef<{ distance: number; scale: number } | null>(null);
   const lastPan = useRef<Point | null>(null);
+  const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null);
+
+  // A quarter turn swaps width and height, so the size limits come from the frame in pixels.
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const observer = new ResizeObserver(([entry]) =>
+      setFrameSize({ width: entry.contentRect.width, height: entry.contentRect.height }),
+    );
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, []);
 
   const fromCenter = (clientX: number, clientY: number): Point => {
     const rect = frameRef.current?.getBoundingClientRect();
@@ -157,11 +172,14 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
   };
 
   const isZoomed = zoom.scale > 1;
-  const mediaStyle = {
-    transform: `translate(${zoom.offset.x}px, ${zoom.offset.y}px) scale(${zoom.scale})`,
+  const isQuarterTurn = rotation === 90 || rotation === 270;
+  const mediaStyle: React.CSSProperties = {
+    transform: `translate(${zoom.offset.x}px, ${zoom.offset.y}px) scale(${zoom.scale}) rotate(${rotation}deg)`,
+    ...(isQuarterTurn && frameSize ? { maxWidth: frameSize.height, maxHeight: frameSize.width } : {}),
   };
-  const mediaClass =
-    'max-h-full max-w-full object-contain transition-transform duration-75 ease-out motion-reduce:transition-none';
+  const mediaClass = `${
+    isQuarterTurn ? '' : 'max-h-full max-w-full'
+  } object-contain transition-transform duration-75 ease-out motion-reduce:transition-none`;
 
   return (
     <div
@@ -193,7 +211,9 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
       ) : (
         <img src={src} alt={alt} draggable={false} style={mediaStyle} className={mediaClass} />
       )}
-      {kind === 'video' && onSeek && onTogglePlay && onToggleFullscreen && (
+      {/* The tap zones assume the player's own controls sit along the bottom edge. Turned, those
+          controls run along a side under a zone, so the zones step aside and keys still seek. */}
+      {kind === 'video' && rotation === 0 && onSeek && onTogglePlay && onToggleFullscreen && (
         <VideoSeekZones
           onSeek={onSeek}
           onTogglePlay={onTogglePlay}

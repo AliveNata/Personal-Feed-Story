@@ -112,6 +112,8 @@ export interface Folder {
   previewUrls: string[];
 }
 
+export type Rotation = 0 | 90 | 180 | 270;
+
 export interface MediaItem {
   id: number;
   mediaType: MediaType;
@@ -125,6 +127,8 @@ export interface MediaItem {
   postedAt: string | null;
   sizeBytes: number;
   addedAt: string;
+  // Clockwise display rotation. The file itself is not rotated.
+  rotation: Rotation;
   fileUrl: string;
   thumbnailUrl: string | null;
 }

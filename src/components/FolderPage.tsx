@@ -308,6 +308,7 @@ const FolderPage: React.FC = () => {
                       src={item.thumbnailUrl}
                       alt=""
                       loading="lazy"
+                      style={item.rotation ? { transform: `rotate(${item.rotation}deg)` } : undefined}
                       className="h-full w-full object-cover"
                     />
                   ) : (
@@ -385,6 +386,16 @@ const FolderPage: React.FC = () => {
           onDelete={handleDeleteItem}
           currentFolderId={folderId}
           onMoved={(result, item) => handleMoved(result, [item.id])}
+          onItemUpdated={(updated) =>
+            setItems((current) =>
+              current.status === 'ready'
+                ? {
+                    status: 'ready',
+                    items: current.items.map((candidate) => (candidate.id === updated.id ? updated : candidate)),
+                  }
+                : current,
+            )
+          }
         />
       )}
     </div>

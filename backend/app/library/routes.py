@@ -107,6 +107,7 @@ class MediaItemResponse(CamelModel):
     size_bytes: int
     # When the file entered the library: the download or upload time.
     added_at: datetime
+    rotation: Literal[0, 90, 180, 270]
     file_url: str
     thumbnail_url: str | None
 
@@ -144,6 +145,7 @@ def _item_response(item: MediaItem) -> MediaItemResponse:
         posted_at=item.posted_at,
         size_bytes=item.blob.size_bytes,
         added_at=item.created_at,
+        rotation=item.rotation if item.rotation in (90, 180, 270) else 0,
         file_url=f"/api/items/{item.id}/file",
         thumbnail_url=f"/api/items/{item.id}/thumbnail" if item.blob.has_thumbnail else None,
     )
@@ -251,6 +253,21 @@ async def _get_item(db: AsyncSession, item_id: int) -> MediaItem:
     if item is None:
         raise HTTPException(status_code=404, detail="File tidak ditemukan")
     return item
+
+
+class RotationRequest(CamelModel):
+    rotation: Literal[0, 90, 180, 270]
+
+
+@router.put("/items/{item_id}/rotation", response_model=MediaItemResponse)
+async def set_item_rotation(
+    item_id: int, body: RotationRequest, db: DbSession
+) -> MediaItemResponse:
+    item = await _get_item(db, item_id)
+    item.rotation = body.rotation
+    await db.commit()
+    await db.refresh(item)
+    return _item_response(item)
 
 
 class MoveRequest(CamelModel):

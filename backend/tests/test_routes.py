@@ -494,3 +494,28 @@ async def test_selected_files_download_as_one_zip_with_original_names(
         assert archive.read("IMG_1 (2).jpg") == red
     assert 'filename="IMG_1.jpg"' in single.headers["content-disposition"]
     assert (missing.status_code, malformed.status_code) == (404, 422)
+
+
+async def test_rotation_is_saved_per_item_and_validated(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    # Arrange
+    await login(client)
+    folder_id = await _create_folder(client, session_factory)
+    upload = await client.post(
+        f"/api/folders/{folder_id}/files",
+        files={"file": ("tidur.jpg", _jpeg_bytes("blue"), "image/jpeg")},
+    )
+    item_id = upload.json()["item"]["id"]
+
+    # Act
+    rotated = await client.put(f"/api/items/{item_id}/rotation", json={"rotation": 90})
+    listed = (await client.get(f"/api/folders/{folder_id}/items?type=photo&source=upload")).json()
+    odd_angle = await client.put(f"/api/items/{item_id}/rotation", json={"rotation": 45})
+    missing = await client.put("/api/items/999999/rotation", json={"rotation": 90})
+
+    # Assert
+    assert upload.json()["item"]["rotation"] == 0
+    assert rotated.json()["rotation"] == 90
+    assert listed[0]["rotation"] == 90
+    assert (odd_angle.status_code, missing.status_code) == (422, 404)
