@@ -103,6 +103,8 @@ export type MediaSource = 'post' | 'story' | 'upload';
 export interface Folder {
   id: number;
   name: string;
+  // For the URL: /library/{slug}.
+  slug: string;
   photoCount: number;
   videoCount: number;
   sizeBytes: number;

@@ -112,7 +112,7 @@ const LibraryPage: React.FC = () => {
                 {hasBackdrop && <FolderBackdrop urls={folder.previewUrls} />}
                 <div className="relative min-w-0 flex-1">
                   <Link
-                    to={`/library/${folder.id}`}
+                    to={`/library/${folder.slug}`}
                     className={`text-lg font-semibold underline-offset-4 hover:underline break-words ${
                       hasBackdrop
                         ? 'text-white focus-visible:ring-white focus-visible:ring-offset-gray-950'

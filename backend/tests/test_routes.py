@@ -519,3 +519,21 @@ async def test_rotation_is_saved_per_item_and_validated(
     assert rotated.json()["rotation"] == 90
     assert listed[0]["rotation"] == 90
     assert (odd_angle.status_code, missing.status_code) == (422, 404)
+
+
+async def test_folder_opens_by_slug_or_by_old_numeric_id(client: httpx.AsyncClient) -> None:
+    # Arrange
+    await login(client)
+    created = (await client.post("/api/folders", json={"name": "Ayu Sastrani"})).json()
+
+    # Act
+    by_slug = await client.get("/api/folders/ayu-sastrani")
+    by_id = await client.get(f"/api/folders/{created['id']}")
+    listed = (await client.get("/api/folders")).json()
+    unknown = await client.get("/api/folders/tidak-ada")
+
+    # Assert
+    assert created["slug"] == "ayu-sastrani"
+    assert by_slug.json()["id"] == by_id.json()["id"] == created["id"]
+    assert listed[0]["slug"] == "ayu-sastrani"
+    assert unknown.status_code == 404

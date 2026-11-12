@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_db, get_redis, require_user
 from app.config import get_settings
 from app.db import DownloadJob, Folder, MediaItem, User
-from app.library import archive, events, service, zipstream
+from app.library import archive, events, service, slugs, zipstream
 from app.library.progress import read_progress
 from app.library.storage import DownloadError, LibraryStorage, content_type_for_upload
 from app.models import CamelModel, Platform
@@ -84,6 +84,8 @@ class SourceCounts(CamelModel):
 class FolderResponse(CamelModel):
     id: int
     name: str
+    # For the URL: /library/{slug}.
+    slug: str
     photo_count: int
     video_count: int
     size_bytes: int
@@ -116,12 +118,19 @@ def _job_response(job: DownloadJob) -> JobResponse:
     return JobResponse.model_validate(job, from_attributes=True)
 
 
+async def _folder_slugs(db: AsyncSession) -> dict[int, str]:
+    return slugs.assign_slugs(
+        [(row.id, row.name) for row in await db.execute(select(Folder.id, Folder.name))]
+    )
+
+
 def _folder_response(
-    summary: service.FolderSummary, preview_ids: list[int] | None = None
+    summary: service.FolderSummary, slug: str, preview_ids: list[int] | None = None
 ) -> FolderResponse:
     return FolderResponse(
         id=summary.folder.id,
         name=summary.folder.name,
+        slug=slug,
         photo_count=summary.photo_count,
         video_count=summary.video_count,
         size_bytes=summary.size_bytes,
@@ -207,24 +216,33 @@ async def create_folder(body: CreateFolderRequest, db: DbSession) -> FolderRespo
     await db.commit()
     summary = await service.get_folder_summary(db, folder.id)
     assert summary is not None
-    return _folder_response(summary)
+    return _folder_response(summary, (await _folder_slugs(db))[folder.id])
 
 
 @router.get("/folders", response_model=list[FolderResponse])
 async def list_folders(db: DbSession) -> list[FolderResponse]:
     previews = await service.random_previews(db)
+    folder_slugs = await _folder_slugs(db)
     return [
-        _folder_response(summary, previews.get(summary.folder.id))
+        _folder_response(summary, folder_slugs[summary.folder.id], previews.get(summary.folder.id))
         for summary in await service.list_folders(db)
     ]
 
 
-@router.get("/folders/{folder_id}", response_model=FolderResponse)
-async def get_folder(folder_id: int, db: DbSession) -> FolderResponse:
-    summary = await service.get_folder_summary(db, folder_id)
-    if summary is None:
+@router.get("/folders/{folder_key}", response_model=FolderResponse)
+async def get_folder(folder_key: str, db: DbSession) -> FolderResponse:
+    """By slug, or by id for links made before folders had slugs."""
+    folder_slugs = await _folder_slugs(db)
+    if folder_key.isdigit():
+        folder_id: int | None = int(folder_key)
+    else:
+        folder_id = next(
+            (key for key, slug in folder_slugs.items() if slug == folder_key.lower()), None
+        )
+    summary = await service.get_folder_summary(db, folder_id) if folder_id is not None else None
+    if summary is None or folder_id is None:
         raise HTTPException(status_code=404, detail="Folder tidak ditemukan")
-    return _folder_response(summary)
+    return _folder_response(summary, folder_slugs[folder_id])
 
 
 @router.get("/folders/{folder_id}/items", response_model=list[MediaItemResponse])

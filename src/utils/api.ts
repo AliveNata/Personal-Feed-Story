@@ -112,7 +112,9 @@ export const fetchFolders = (): Promise<Folder[]> => request<Folder[]>('/api/fol
 export const createFolder = (name: string): Promise<Folder> =>
   request<Folder>('/api/folders', { method: 'POST', json: { name } });
 
-export const fetchFolder = (folderId: number): Promise<Folder> => request<Folder>(`/api/folders/${folderId}`);
+// A slug from the URL, or a numeric id from older links.
+export const fetchFolder = (folderKey: string): Promise<Folder> =>
+  request<Folder>(`/api/folders/${encodeURIComponent(folderKey)}`);
 
 export const fetchFolderItems = (
   folderId: number,

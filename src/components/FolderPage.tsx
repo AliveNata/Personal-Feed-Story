@@ -41,7 +41,7 @@ const errorMessage = (caught: unknown, fallback: string) =>
   caught instanceof ApiError ? caught.message : fallback;
 
 const FolderPage: React.FC = () => {
-  const folderId = Number(useParams().folderId);
+  const folderKey = useParams().folderKey ?? '';
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab: MediaType = searchParams.get('tab') === 'video' ? 'video' : 'photo';
@@ -64,7 +64,7 @@ const FolderPage: React.FC = () => {
   );
 
   const loadFolder = useCallback(() => {
-    fetchFolder(folderId)
+    fetchFolder(folderKey)
       .then((data) => {
         setFolder(data);
         setFolderError(null);
@@ -73,9 +73,28 @@ const FolderPage: React.FC = () => {
         console.error('fetchFolder failed', caught);
         setFolderError(errorMessage(caught, 'Gagal memuat folder'));
       });
-  }, [folderId]);
+  }, [folderKey]);
+
+  // The URL names the folder, the API calls below use its id once known.
+  const folderId = folder?.id;
+
+  // Old links (/library/9) and a stale slug end up on the folder's current readable URL.
+  useEffect(() => {
+    if (folder && folderKey !== folder.slug) {
+      const query = searchParams.toString();
+      navigate(`/library/${folder.slug}${query ? `?${query}` : ''}`, { replace: true });
+    }
+  }, [folder, folderKey, navigate, searchParams]);
+
+  // Another folder: drop the old one so its files never show under the new name.
+  useEffect(() => {
+    setFolder((current) =>
+      current && current.slug !== folderKey && String(current.id) !== folderKey ? null : current,
+    );
+  }, [folderKey]);
 
   const loadItems = useCallback(() => {
+    if (folderId === undefined) return;
     setItems({ status: 'loading' });
     fetchFolderItems(folderId, activeTab, activeSource)
       .then((data) => setItems({ status: 'ready', items: data }))
@@ -403,7 +422,7 @@ const FolderPage: React.FC = () => {
         />
       )}
 
-      {viewerIndex !== null && readyItems[viewerIndex] && (
+      {viewerIndex !== null && readyItems[viewerIndex] && folder && (
         <MediaViewer
           item={readyItems[viewerIndex]}
           position={viewerIndex + 1}
@@ -415,7 +434,7 @@ const FolderPage: React.FC = () => {
             setViewerIndex((index) => (index === null ? null : (index + 1) % readyItems.length))
           }
           onDelete={handleDeleteItem}
-          currentFolderId={folderId}
+          currentFolderId={folder.id}
           onMoved={(result, item) => handleMoved(result, [item.id])}
           onItemUpdated={(updated) =>
             setItems((current) =>

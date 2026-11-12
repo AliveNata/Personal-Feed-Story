@@ -168,7 +168,7 @@ function App() {
                   }
                 />
                 <Route
-                  path="/library/:folderId"
+                  path="/library/:folderKey"
                   element={
                     <RequireAuth>
                       <FolderPage />
