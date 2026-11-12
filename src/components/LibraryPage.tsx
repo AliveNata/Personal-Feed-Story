@@ -158,7 +158,7 @@ const LibraryPage: React.FC = () => {
                     label="Tambah file"
                     tone="green"
                     isOnDark={hasBackdrop}
-                    icon={<FolderPlus className="h-6 w-6" aria-hidden="true" />}
+                    icon={<FolderPlus className="h-5 w-5" aria-hidden="true" />}
                     onClick={() => setUploadTarget(folder)}
                   />
                   {folder.photoCount + folder.videoCount > 0 && (
@@ -166,7 +166,7 @@ const LibraryPage: React.FC = () => {
                       label="Download folder (ZIP)"
                       tone="blue"
                       isOnDark={hasBackdrop}
-                      icon={<Download className="h-6 w-6" aria-hidden="true" />}
+                      icon={<Download className="h-5 w-5" aria-hidden="true" />}
                       href={folderZipUrl(folder.id)}
                     />
                   )}
@@ -175,7 +175,7 @@ const LibraryPage: React.FC = () => {
                     confirmText={`Hapus "${folder.name}" beserta semua isinya?`}
                     onConfirm={() => handleDelete(folder.id)}
                     isOnDark={hasBackdrop}
-                    icon={<Trash2 className="h-6 w-6" aria-hidden="true" />}
+                    icon={<Trash2 className="h-5 w-5" aria-hidden="true" />}
                   />
                 </div>
               </li>
