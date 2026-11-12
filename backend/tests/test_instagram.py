@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import fakeredis
@@ -23,6 +24,7 @@ from app.sources.instagram import (
     _has_more,
     _post_count,
     _to_highlight,
+    build_loader,
     instagram_media_urls,
     instagram_slides,
     map_instagram_post,
@@ -537,3 +539,14 @@ def test_post_count_reads_raw_field_and_tolerates_missing() -> None:
     # Act / Assert
     assert _post_count(with_raw) == 128
     assert _post_count(without) is None
+
+
+def test_missing_session_file_starts_without_a_session(tmp_path: Path) -> None:
+    # Arrange
+    missing = tmp_path / "ig-session"
+
+    # Act
+    loader = build_loader("someone", missing)
+
+    # Assert
+    assert loader.context.is_logged_in is False

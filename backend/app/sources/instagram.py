@@ -220,7 +220,14 @@ def build_loader(
             (lambda ctx: BudgetRateController(ctx, budget, budget_key)) if budget else None
         ),
     )
-    if username and session_file is not None:
+    if username and session_file is not None and not session_file.is_file():
+        # A missing file (repo copied without the gitignored secrets folder) must not stop
+        # the app: a cookie pasted on the Session page still works without it.
+        logger.warning(
+            "IG_SESSION_FILE %s not found, starting without the .env instagram session",
+            session_file,
+        )
+    elif username and session_file is not None:
         loader.load_session_from_file(username, str(session_file))
         logger.info("instagram session loaded for %s", username)
     elif budget_key == PLATFORM:
