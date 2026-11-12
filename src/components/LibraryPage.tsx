@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Folder } from '../types';
 import { ApiError, deleteFolder, fetchFolders, formatBytes } from '../utils/api';
+import { FOLDER_SORT_OPTIONS, FolderSort, readFolderSort, saveFolderSort, sortFolders } from '../utils/folderSort';
 import FolderBackdrop from './FolderBackdrop';
 import NewFolderForm from './NewFolderForm';
 import UploadDialog from './UploadDialog';
@@ -16,6 +17,8 @@ const LibraryPage: React.FC = () => {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [uploadTarget, setUploadTarget] = useState<Folder | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [sort, setSort] = useState<FolderSort>(readFolderSort);
+  const folders = useMemo(() => (state.status === 'ready' ? sortFolders(state.folders, sort) : []), [state, sort]);
 
   const load = useCallback((silent = false) => {
     if (!silent) setState({ status: 'loading' });
@@ -62,7 +65,7 @@ const LibraryPage: React.FC = () => {
           onCancel={() => setIsCreating(false)}
           onCreated={(folder) => {
             setIsCreating(false);
-            // Newest first, like the list the server returns.
+            // The sort puts the new folder where it belongs.
             setState((previous) =>
               previous.status === 'ready'
                 ? { status: 'ready', folders: [folder, ...previous.folders] }
@@ -100,9 +103,33 @@ const LibraryPage: React.FC = () => {
         </Panel>
       )}
 
+      {folders.length > 1 && (
+        <div className="mb-3 flex items-center justify-end gap-2">
+          <label htmlFor="folder-sort" className="text-sm font-semibold text-gray-700">
+            Urutkan
+          </label>
+          <select
+            id="folder-sort"
+            value={sort}
+            onChange={(event) => {
+              const next = event.target.value as FolderSort;
+              setSort(next);
+              saveFolderSort(next);
+            }}
+            className={`rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 ${focusRing}`}
+          >
+            {FOLDER_SORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {state.status === 'ready' && state.folders.length > 0 && (
         <ul className="overflow-hidden bg-white rounded-lg shadow-md divide-y divide-gray-200">
-          {state.folders.map((folder) => {
+          {folders.map((folder) => {
             const hasBackdrop = folder.previewUrls.length > 0;
             return (
               <li
