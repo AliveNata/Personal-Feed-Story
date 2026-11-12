@@ -1,3 +1,5 @@
+import io
+import zipfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -208,8 +210,6 @@ async def _create_folder(
 
 
 def _jpeg_bytes(color: str) -> bytes:
-    import io
-
     from PIL import Image
 
     buffer = io.BytesIO()
@@ -464,3 +464,32 @@ async def test_create_folder_manually_and_refuse_duplicate_names(
     assert "sudah ada" in duplicate.json()["detail"]
     assert blank.status_code == 422
     assert history[0]["action"] == "create_folder"
+
+
+async def test_selected_files_download_as_one_zip_with_original_names(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    # Arrange
+    await login(client)
+    folder_id = await _create_folder(client, session_factory)
+    url = f"/api/folders/{folder_id}/files"
+    green, red = _jpeg_bytes("green"), _jpeg_bytes("red")
+    first = (await client.post(url, files={"file": ("IMG_1.jpg", green, "image/jpeg")})).json()
+    second = (await client.post(url, files={"file": ("IMG_1.jpg", red, "image/jpeg")})).json()
+    ids = f"{first['item']['id']},{second['item']['id']},999999"
+
+    # Act
+    response = await client.get(f"/api/items/zip?ids={ids}&name=Liburan Bali")
+    single = await client.get(f"/api/items/{first['item']['id']}/file?download=true")
+    missing = await client.get("/api/items/zip?ids=999999")
+    malformed = await client.get("/api/items/zip?ids=1;drop")
+
+    # Assert
+    assert response.status_code == 200
+    assert 'filename="Liburan Bali.zip"' in response.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.namelist() == ["IMG_1.jpg", "IMG_1 (2).jpg"]
+        assert archive.read("IMG_1.jpg") == green
+        assert archive.read("IMG_1 (2).jpg") == red
+    assert 'filename="IMG_1.jpg"' in single.headers["content-disposition"]
+    assert (missing.status_code, malformed.status_code) == (404, 422)

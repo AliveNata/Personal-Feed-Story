@@ -3,10 +3,11 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
 from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import Field, field_validator
 from redis.asyncio import Redis
 from sqlalchemy import func, select
@@ -15,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_db, get_redis, require_user
 from app.config import get_settings
 from app.db import DownloadJob, Folder, MediaItem, User
-from app.library import archive, events, service
+from app.library import archive, events, service, zipstream
 from app.library.progress import read_progress
 from app.library.storage import DownloadError, LibraryStorage, content_type_for_upload
 from app.models import CamelModel, Platform
@@ -283,6 +284,49 @@ async def delete_item(item_id: int, db: DbSession, storage: Storage) -> None:
     await service.delete_item(db, storage, await _get_item(db, item_id))
 
 
+MAX_ZIP_ITEMS = 2000
+
+
+@router.get("/items/zip")
+async def download_items_zip(
+    db: DbSession,
+    storage: Storage,
+    ids: Annotated[str, Query(min_length=1, max_length=20000, pattern=r"^\d+(,\d+)*$")],
+    name: Annotated[str, Query(max_length=100)] = "library",
+) -> StreamingResponse:
+    """Selected files as one ZIP. A GET, so the browser saves it as a normal download."""
+    item_ids = list(dict.fromkeys(int(part) for part in ids.split(",")))
+    if len(item_ids) > MAX_ZIP_ITEMS:
+        raise HTTPException(status_code=422, detail=f"Maksimal {MAX_ZIP_ITEMS} file per ZIP")
+    found = {
+        item.id: item
+        for item in (await db.scalars(select(MediaItem).where(MediaItem.id.in_(item_ids)))).all()
+    }
+    items = [found[item_id] for item_id in item_ids if item_id in found]
+    paths = [storage.blob_path(item.blob_sha256, item.blob.extension) for item in items]
+    present = [(item, path) for item, path in zip(items, paths, strict=True) if path.exists()]
+    if not present:
+        raise HTTPException(status_code=404, detail="File yang dipilih tidak ditemukan")
+    names = zipstream.unique_names([zipstream.download_name(item) for item, _ in present])
+    entries = [
+        zipstream.ZipEntry(path, entry_name)
+        for (_, path), entry_name in zip(present, names, strict=True)
+    ]
+    zip_name = (zipstream.UNSAFE_NAME.sub("_", name).strip(" .") or "library") + ".zip"
+    # Headers are latin-1: an ASCII fallback, plus the real UTF-8 name for other folder names.
+    ascii_name = zip_name.encode("ascii", "replace").decode().replace("?", "_")
+    return StreamingResponse(
+        zipstream.stream_zip(entries),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(zip_name)}"
+            ),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @router.get("/items/{item_id}/file")
 async def get_item_file(
     item_id: int, db: DbSession, storage: Storage, download: bool = False
@@ -291,11 +335,10 @@ async def get_item_file(
     path = storage.blob_path(item.blob_sha256, item.blob.extension)
     if not path.exists():
         raise HTTPException(status_code=410, detail="File hilang dari disk")
-    filename = f"{item.platform}_{item.author_username}_{item.source_post_id}_{item.item_index}"
     return FileResponse(
         path,
         media_type=item.blob.content_type,
-        filename=f"{filename}.{item.blob.extension}",
+        filename=zipstream.download_name(item),
         content_disposition_type="attachment" if download else "inline",
         headers={"Cache-Control": "private, max-age=86400"},
     )

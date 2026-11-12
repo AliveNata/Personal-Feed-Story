@@ -313,3 +313,11 @@ export const fetchStories = (username: string, refresh = false): Promise<Stories
   if (refresh) params.set('refresh', 'true');
   return request<StoriesResponse>(`/api/instagram/stories?${params.toString()}`);
 };
+
+// One file downloads as itself, more than one as a ZIP streamed by the server.
+export const selectionDownloadUrl = (itemIds: number[], folderName: string): string => {
+  if (itemIds.length === 1) return `/api/items/${itemIds[0]}/file?download=true`;
+  const today = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD in local time
+  const params = new URLSearchParams({ ids: itemIds.join(','), name: `${folderName} ${today}` });
+  return `/api/items/zip?${params.toString()}`;
+};

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Play } from 'lucide-react';
+import { Download, Play } from 'lucide-react';
 import { Folder, MediaItem, MediaSource, MediaType } from '../types';
 import {
   ApiError,
@@ -10,6 +10,7 @@ import {
   fetchFolderItems,
   formatBytes,
   MoveResult,
+  selectionDownloadUrl,
 } from '../utils/api';
 import MediaViewer from './MediaViewer';
 import MoveForm from './MoveForm';
@@ -307,7 +308,17 @@ const FolderPage: React.FC = () => {
       {selected.size > 0 && folder && (
         <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-300 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
           <div className="container mx-auto flex flex-col gap-2 px-4 py-3 md:flex-row md:items-end">
-            <p className="text-sm font-semibold text-gray-900 md:pb-3">{selected.size} dipilih</p>
+            <div className="flex items-center justify-between gap-3 md:justify-start">
+              <p className="text-sm font-semibold text-gray-900">{selected.size} dipilih</p>
+              <a
+                href={selectionDownloadUrl(Array.from(selected), folder.name)}
+                download
+                className={`inline-flex items-center gap-2 ${secondaryButton}`}
+              >
+                <Download className="h-4 w-4" aria-hidden="true" />
+                {selected.size === 1 ? 'Download' : `Download ZIP (${selected.size})`}
+              </a>
+            </div>
             <div className="min-w-0 flex-1">
               <MoveForm
                 itemIds={Array.from(selected)}
