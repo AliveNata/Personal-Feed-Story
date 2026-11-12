@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Download, Play } from 'lucide-react';
 import { Folder, MediaItem, MediaSource, MediaType } from '../types';
+import { LibrarySort, SORT_OPTIONS, readLibrarySort, saveLibrarySort, sortItems } from '../utils/librarySort';
 import {
   ApiError,
   deleteFolder,
@@ -50,6 +51,12 @@ const FolderPage: React.FC = () => {
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [moveNotice, setMoveNotice] = useState<MoveResult | null>(null);
+  const [sort, setSort] = useState<LibrarySort>(readLibrarySort);
+  // Sorted in the browser: a folder's list is loaded whole, so this needs no extra request.
+  const readyItems = useMemo(
+    () => (items.status === 'ready' ? sortItems(items.items, sort) : []),
+    [items, sort],
+  );
 
   const loadFolder = useCallback(() => {
     fetchFolder(folderId)
@@ -134,7 +141,6 @@ const FolderPage: React.FC = () => {
     );
   }
 
-  const readyItems = items.status === 'ready' ? items.items : [];
   const allSelected = readyItems.length > 0 && readyItems.every((item) => selected.has(item.id));
 
   return (
@@ -225,7 +231,7 @@ const FolderPage: React.FC = () => {
       )}
 
       {readyItems.length > 0 && (
-        <div className="mb-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <button
             type="button"
             className={secondaryButton}
@@ -233,6 +239,27 @@ const FolderPage: React.FC = () => {
           >
             {allSelected ? 'Batal pilih semua' : `Pilih semua ${TYPE_LABELS[activeTab].toLowerCase()}`}
           </button>
+          <div className="flex items-center gap-2">
+            <label htmlFor="library-sort" className="text-sm font-semibold text-gray-700">
+              Urutkan
+            </label>
+            <select
+              id="library-sort"
+              value={sort}
+              onChange={(event) => {
+                const next = event.target.value as LibrarySort;
+                setSort(next);
+                saveLibrarySort(next);
+              }}
+              className={`rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 ${focusRing}`}
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       )}
 

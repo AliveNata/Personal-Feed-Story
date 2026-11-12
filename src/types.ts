@@ -124,6 +124,7 @@ export interface MediaItem {
   permalink: string | null;
   postedAt: string | null;
   sizeBytes: number;
+  addedAt: string;
   fileUrl: string;
   thumbnailUrl: string | null;
 }

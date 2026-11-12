@@ -105,6 +105,8 @@ class MediaItemResponse(CamelModel):
     permalink: str | None
     posted_at: datetime | None
     size_bytes: int
+    # When the file entered the library: the download or upload time.
+    added_at: datetime
     file_url: str
     thumbnail_url: str | None
 
@@ -141,6 +143,7 @@ def _item_response(item: MediaItem) -> MediaItemResponse:
         permalink=item.permalink,
         posted_at=item.posted_at,
         size_bytes=item.blob.size_bytes,
+        added_at=item.created_at,
         file_url=f"/api/items/{item.id}/file",
         thumbnail_url=f"/api/items/{item.id}/thumbnail" if item.blob.has_thumbnail else None,
     )

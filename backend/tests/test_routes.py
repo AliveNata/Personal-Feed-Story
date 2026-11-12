@@ -240,6 +240,7 @@ async def test_upload_sorts_by_type_and_skips_duplicates(
     assert first.json()["status"] == "saved"
     assert first.json()["item"]["platform"] == "upload"
     assert first.json()["item"]["caption"] == "liburan.JPG"
+    assert first.json()["item"]["addedAt"]
     assert again.json() == {"status": "skipped", "item": None}
     assert (fake_image.status_code, unsupported.status_code) == (422, 415)
     assert len(photos) == 1
