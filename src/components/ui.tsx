@@ -25,11 +25,12 @@ export const Panel: React.FC<{ children: React.ReactNode; role?: string; tone?: 
 
 type IconTone = 'green' | 'red' | 'blue';
 
-// Darker shades of each hue so the icon keeps a 4.5:1 contrast on the white button.
-const ICON_TONES: Record<IconTone, string> = {
-  green: 'text-green-700 hover:bg-green-50',
-  red: 'text-red-700 hover:bg-red-50',
-  blue: 'text-blue-700 hover:bg-blue-50',
+// Bare icons, so the shade follows what is behind them: dark shades on white, light shades
+// on a photo backdrop. Both keep at least 3:1 contrast, the minimum for icons.
+const ICON_TONES: Record<IconTone, { light: string; dark: string }> = {
+  green: { light: 'text-green-700 hover:bg-green-50', dark: 'text-green-400 hover:bg-white/10' },
+  red: { light: 'text-red-700 hover:bg-red-50', dark: 'text-red-400 hover:bg-white/10' },
+  blue: { light: 'text-blue-700 hover:bg-blue-50', dark: 'text-sky-400 hover:bg-white/10' },
 };
 
 interface IconActionProps {
@@ -39,14 +40,26 @@ interface IconActionProps {
   onClick?: () => void;
   // Given, the action is a link (a download) instead of a button.
   href?: string;
+  isOnDark?: boolean;
 }
 
 /**
  * Round 44px icon button with its name in a tooltip on hover and keyboard focus. The name is
  * also the accessible label, so screen readers get the same words as the tooltip.
  */
-export const IconAction: React.FC<IconActionProps> = ({ label, icon, tone, onClick, href }) => {
-  const className = `flex h-11 w-11 items-center justify-center rounded-full border border-gray-300 bg-white shadow-sm ${ICON_TONES[tone]} ${focusRing}`;
+export const IconAction: React.FC<IconActionProps> = ({
+  label,
+  icon,
+  tone,
+  onClick,
+  href,
+  isOnDark = false,
+}) => {
+  // 44px hit area around the bare icon, for touch. The drop shadow keeps it readable over photos.
+  const toneClass = isOnDark
+    ? `${ICON_TONES[tone].dark} drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)] focus-visible:ring-white focus-visible:ring-offset-gray-950`
+    : ICON_TONES[tone].light;
+  const className = `flex h-11 w-11 items-center justify-center rounded-md ${toneClass} ${focusRing}`;
   return (
     <span className="group relative inline-flex">
       {href ? (
@@ -91,7 +104,11 @@ export const ConfirmDelete: React.FC<ConfirmDeleteProps> = ({
   const [error, setError] = React.useState<string | null>(null);
 
   if (!isAsking) {
-    if (icon) return <IconAction label={label} icon={icon} tone="red" onClick={() => setIsAsking(true)} />;
+    if (icon) {
+      return (
+        <IconAction label={label} icon={icon} tone="red" isOnDark={isOnDark} onClick={() => setIsAsking(true)} />
+      );
+    }
     return (
       <button type="button" className={dangerButton} onClick={() => setIsAsking(true)}>
         {label}

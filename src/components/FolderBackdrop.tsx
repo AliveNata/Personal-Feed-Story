@@ -80,8 +80,9 @@ const FolderBackdrop: React.FC<{ urls: string[] }> = ({ urls }) => {
           />
         ))}
       </div>
-      {/* Darkest where the folder name sits, so white text keeps its contrast over any photo. */}
-      <div className="absolute inset-0 bg-gradient-to-r from-gray-950/85 via-gray-950/65 to-gray-950/40" />
+      {/* Dark under the folder name on the left and under the icons on the right, lighter in
+          between where the photos show: text and icons keep their contrast over any photo. */}
+      <div className="absolute inset-0 bg-gradient-to-r from-gray-950/85 via-gray-950/45 to-gray-950/75" />
     </div>
   );
 };
