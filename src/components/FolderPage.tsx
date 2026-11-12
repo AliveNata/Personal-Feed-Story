@@ -13,6 +13,8 @@ import {
   MoveResult,
   selectionDownloadUrl,
 } from '../utils/api';
+import HoverPreview from './HoverPreview';
+import { useHoverPreview } from './useHoverPreview';
 import MediaViewer from './MediaViewer';
 import MoveForm from './MoveForm';
 import SelectToggle from './SelectToggle';
@@ -50,6 +52,9 @@ const FolderPage: React.FC = () => {
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  // Checkboxes only show after "Pilih foto", so a plain browse has a clean grid.
+  const [isSelecting, setIsSelecting] = useState(false);
+  const { preview, close: closePreview, tileHandlers, consumeHoldClick } = useHoverPreview();
   const [moveNotice, setMoveNotice] = useState<MoveResult | null>(null);
   const [sort, setSort] = useState<LibrarySort>(readLibrarySort);
   // Sorted in the browser: a folder's list is loaded whole, so this needs no extra request.
@@ -83,7 +88,12 @@ const FolderPage: React.FC = () => {
   useEffect(loadFolder, [loadFolder]);
   useEffect(loadItems, [loadItems]);
   // A selection only makes sense for the files on screen.
-  useEffect(() => setSelected(new Set()), [folderId, activeTab, activeSource]);
+  const stopSelecting = useCallback(() => {
+    setSelected(new Set());
+    setIsSelecting(false);
+  }, []);
+
+  useEffect(() => stopSelecting(), [folderId, activeTab, activeSource, stopSelecting]);
 
   const toggleSelected = (itemId: number) =>
     setSelected((previous) => {
@@ -98,7 +108,7 @@ const FolderPage: React.FC = () => {
 
   const handleMoved = (result: MoveResult, movedIds: number[]) => {
     setMoveNotice(result);
-    setSelected(new Set());
+    stopSelecting();
     if (items.status === 'ready') {
       const gone = new Set(movedIds);
       const remaining = items.items.filter((candidate) => !gone.has(candidate.id));
@@ -232,13 +242,24 @@ const FolderPage: React.FC = () => {
 
       {readyItems.length > 0 && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <button
-            type="button"
-            className={secondaryButton}
-            onClick={() => setSelected(allSelected ? new Set() : new Set(readyItems.map((item) => item.id)))}
-          >
-            {allSelected ? 'Batal pilih semua' : `Pilih semua ${TYPE_LABELS[activeTab].toLowerCase()}`}
-          </button>
+          {isSelecting ? (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={secondaryButton}
+                onClick={() => setSelected(allSelected ? new Set() : new Set(readyItems.map((item) => item.id)))}
+              >
+                {allSelected ? 'Batal pilih semua' : `Pilih semua ${TYPE_LABELS[activeTab].toLowerCase()}`}
+              </button>
+              <button type="button" className={secondaryButton} onClick={stopSelecting}>
+                Selesai memilih
+              </button>
+            </div>
+          ) : (
+            <button type="button" className={secondaryButton} onClick={() => setIsSelecting(true)}>
+              Pilih {TYPE_LABELS[activeTab].toLowerCase()}
+            </button>
+          )}
           <div className="flex items-center gap-2">
             <label htmlFor="library-sort" className="text-sm font-semibold text-gray-700">
               Urutkan
@@ -299,9 +320,15 @@ const FolderPage: React.FC = () => {
               >
                 <button
                   type="button"
-                  onClick={() => setViewerIndex(index)}
+                  {...tileHandlers(item)}
+                  onClick={() => {
+                    if (consumeHoldClick()) return;
+                    closePreview();
+                    setViewerIndex(index);
+                  }}
                   aria-label={`Buka ${item.mediaType === 'video' ? 'video' : 'foto'} dari @${item.authorUsername}`}
-                  className={`relative block aspect-square w-full overflow-hidden rounded-md bg-gray-200 ${focusRing}`}
+                  style={{ WebkitTouchCallout: 'none' }}
+                  className={`relative block aspect-square w-full select-none overflow-hidden rounded-md bg-gray-200 ${focusRing}`}
                 >
                   {item.thumbnailUrl ? (
                     <img
@@ -322,11 +349,13 @@ const FolderPage: React.FC = () => {
                     </span>
                   )}
                 </button>
-                <SelectToggle
-                  isSelected={selected.has(item.id)}
-                  label={`Pilih ${item.mediaType === 'video' ? 'video' : 'foto'} ${index + 1}`}
-                  onToggle={() => toggleSelected(item.id)}
-                />
+                {isSelecting && (
+                  <SelectToggle
+                    isSelected={selected.has(item.id)}
+                    label={`Pilih ${item.mediaType === 'video' ? 'video' : 'foto'} ${index + 1}`}
+                    onToggle={() => toggleSelected(item.id)}
+                  />
+                )}
               </li>
             ))}
           </ul>
@@ -353,12 +382,14 @@ const FolderPage: React.FC = () => {
                 currentFolderId={folder.id}
                 inputId="move-folder-bar"
                 onMoved={(result) => handleMoved(result, Array.from(selected))}
-                onCancel={() => setSelected(new Set())}
+                onCancel={stopSelecting}
               />
             </div>
           </div>
         </div>
       )}
+
+      {preview && viewerIndex === null && <HoverPreview preview={preview} />}
 
       {isUploadOpen && folder && (
         <UploadDialog
