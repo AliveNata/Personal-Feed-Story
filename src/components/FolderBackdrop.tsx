@@ -1,7 +1,13 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 
 // Slow on purpose: the strip is a hint of what is inside, not something to watch.
-const PAN_PIXELS_PER_SECOND = 18;
+const MIN_PAN_PIXELS_PER_SECOND = 10;
+const MAX_PAN_PIXELS_PER_SECOND = 26;
+const MIN_PHOTO_WIDTH = 104;
+const MAX_PHOTO_WIDTH = 248;
+const EASINGS = ['ease-in-out', 'linear', 'ease', 'cubic-bezier(0.45, 0, 0.2, 1)'];
+
+const between = (low: number, high: number) => low + Math.random() * (high - low);
 
 const prefersReducedMotion = () =>
   typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -13,6 +19,18 @@ const prefersReducedMotion = () =>
 const FolderBackdrop: React.FC<{ urls: string[] }> = ({ urls }) => {
   const frameRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
+  // Rolled once per row: every row gets its own photo widths, speed, direction and starting
+  // point, so a page of folders never moves in step like one block.
+  const motion = useMemo(
+    () => ({
+      widths: urls.map(() => Math.round(between(MIN_PHOTO_WIDTH, MAX_PHOTO_WIDTH))),
+      speed: between(MIN_PAN_PIXELS_PER_SECOND, MAX_PAN_PIXELS_PER_SECOND),
+      reverse: Math.random() < 0.5,
+      startAt: Math.random(),
+      easing: EASINGS[Math.floor(Math.random() * EASINGS.length)],
+    }),
+    [urls],
+  );
 
   useEffect(() => {
     const frame = frameRef.current;
@@ -25,15 +43,15 @@ const FolderBackdrop: React.FC<{ urls: string[] }> = ({ urls }) => {
       animation?.cancel();
       const distance = strip.scrollWidth - frame.clientWidth;
       if (distance <= 0) return;
-      animation = strip.animate(
-        [{ transform: 'translateX(0)' }, { transform: `translateX(-${distance}px)` }],
-        {
-          duration: (distance / PAN_PIXELS_PER_SECOND) * 1000,
-          direction: 'alternate',
-          iterations: Infinity,
-          easing: 'ease-in-out',
-        },
-      );
+      const ends = [{ transform: 'translateX(0)' }, { transform: `translateX(-${distance}px)` }];
+      const duration = (distance / motion.speed) * 1000;
+      animation = strip.animate(motion.reverse ? ends.reverse() : ends, {
+        duration,
+        direction: 'alternate',
+        iterations: Infinity,
+        easing: motion.easing,
+      });
+      animation.currentTime = motion.startAt * duration * 2;
     };
 
     const observer = new ResizeObserver(restart);
@@ -43,12 +61,12 @@ const FolderBackdrop: React.FC<{ urls: string[] }> = ({ urls }) => {
       observer.disconnect();
       animation?.cancel();
     };
-  }, [urls]);
+  }, [urls, motion]);
 
   return (
     <div ref={frameRef} aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
       <div ref={stripRef} className="flex h-full w-max">
-        {urls.map((url) => (
+        {urls.map((url, index) => (
           <img
             key={url}
             src={url}
@@ -57,7 +75,8 @@ const FolderBackdrop: React.FC<{ urls: string[] }> = ({ urls }) => {
             onError={(event) => {
               event.currentTarget.style.display = 'none';
             }}
-            className="h-full w-44 shrink-0 object-cover"
+            style={{ width: motion.widths[index] }}
+            className="h-full shrink-0 object-cover"
           />
         ))}
       </div>

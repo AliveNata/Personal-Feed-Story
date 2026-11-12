@@ -327,3 +327,5 @@ export const selectionDownloadUrl = (itemIds: number[], folderName: string): str
 
 export const setItemRotation = (itemId: number, rotation: Rotation): Promise<MediaItem> =>
   request<MediaItem>(`/api/items/${itemId}/rotation`, { method: 'PUT', json: { rotation } });
+
+export const folderZipUrl = (folderId: number): string => `/api/folders/${folderId}/zip`;

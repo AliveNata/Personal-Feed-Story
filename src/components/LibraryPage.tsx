@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { Download, FolderPlus, Trash2 } from 'lucide-react';
 import { Folder } from '../types';
-import { ApiError, deleteFolder, fetchFolders, formatBytes } from '../utils/api';
+import { ApiError, deleteFolder, fetchFolders, folderZipUrl, formatBytes } from '../utils/api';
 import { FOLDER_SORT_OPTIONS, FolderSort, readFolderSort, saveFolderSort, sortFolders } from '../utils/folderSort';
 import FolderBackdrop from './FolderBackdrop';
 import NewFolderForm from './NewFolderForm';
 import UploadDialog from './UploadDialog';
-import { ConfirmDelete, Panel, focusRing, primaryButton, secondaryButton } from './ui';
+import { ConfirmDelete, IconAction, Panel, focusRing, primaryButton, secondaryButton } from './ui';
 
 type LoadState =
   { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; folders: Folder[] };
@@ -48,7 +49,30 @@ const LibraryPage: React.FC = () => {
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Library</h1>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {folders.length > 1 && (
+            <div className="flex items-center gap-2">
+              <label htmlFor="folder-sort" className="sr-only text-sm font-semibold text-gray-700 sm:not-sr-only">
+                Urutkan
+              </label>
+              <select
+                id="folder-sort"
+                value={sort}
+                onChange={(event) => {
+                  const next = event.target.value as FolderSort;
+                  setSort(next);
+                  saveFolderSort(next);
+                }}
+                className={`min-h-[44px] rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-900 ${focusRing}`}
+              >
+                {FOLDER_SORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <Link to="/library/activity" className={`inline-flex items-center ${secondaryButton}`}>
             Riwayat
           </Link>
@@ -103,30 +127,6 @@ const LibraryPage: React.FC = () => {
         </Panel>
       )}
 
-      {folders.length > 1 && (
-        <div className="mb-3 flex items-center justify-end gap-2">
-          <label htmlFor="folder-sort" className="text-sm font-semibold text-gray-700">
-            Urutkan
-          </label>
-          <select
-            id="folder-sort"
-            value={sort}
-            onChange={(event) => {
-              const next = event.target.value as FolderSort;
-              setSort(next);
-              saveFolderSort(next);
-            }}
-            className={`rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 ${focusRing}`}
-          >
-            {FOLDER_SORT_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
       {state.status === 'ready' && state.folders.length > 0 && (
         <ul className="overflow-hidden bg-white rounded-lg shadow-md divide-y divide-gray-200">
           {folders.map((folder) => {
@@ -154,14 +154,26 @@ const LibraryPage: React.FC = () => {
                   </p>
                 </div>
                 <div className="relative flex flex-wrap items-center gap-2">
-                  <button type="button" className={secondaryButton} onClick={() => setUploadTarget(folder)}>
-                    Tambah file
-                  </button>
+                  <IconAction
+                    label="Tambah file"
+                    tone="green"
+                    icon={<FolderPlus className="h-5 w-5" aria-hidden="true" />}
+                    onClick={() => setUploadTarget(folder)}
+                  />
+                  {folder.photoCount + folder.videoCount > 0 && (
+                    <IconAction
+                      label="Download folder (ZIP)"
+                      tone="blue"
+                      icon={<Download className="h-5 w-5" aria-hidden="true" />}
+                      href={folderZipUrl(folder.id)}
+                    />
+                  )}
                   <ConfirmDelete
                     label="Hapus folder"
                     confirmText={`Hapus "${folder.name}" beserta semua isinya?`}
                     onConfirm={() => handleDelete(folder.id)}
                     isOnDark={hasBackdrop}
+                    icon={<Trash2 className="h-5 w-5" aria-hidden="true" />}
                   />
                 </div>
               </li>

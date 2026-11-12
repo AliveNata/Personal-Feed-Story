@@ -537,3 +537,26 @@ async def test_folder_opens_by_slug_or_by_old_numeric_id(client: httpx.AsyncClie
     assert by_slug.json()["id"] == by_id.json()["id"] == created["id"]
     assert listed[0]["slug"] == "ayu-sastrani"
     assert unknown.status_code == 404
+
+
+async def test_whole_folder_downloads_as_one_zip(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    # Arrange
+    await login(client)
+    folder_id = await _create_folder(client, session_factory)
+    url = f"/api/folders/{folder_id}/files"
+    await client.post(url, files={"file": ("a.jpg", _jpeg_bytes("green"), "image/jpeg")})
+    await client.post(url, files={"file": ("b.jpg", _jpeg_bytes("red"), "image/jpeg")})
+    empty = (await client.post("/api/folders", json={"name": "Kosong"})).json()
+
+    # Act
+    response = await client.get(f"/api/folders/{folder_id}/zip")
+    empty_response = await client.get(f"/api/folders/{empty['id']}/zip")
+
+    # Assert
+    assert response.status_code == 200
+    assert "Upload " in response.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.namelist() == ["a.jpg", "b.jpg"]
+    assert empty_response.status_code == 404

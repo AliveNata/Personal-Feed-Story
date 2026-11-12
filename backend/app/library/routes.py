@@ -325,26 +325,14 @@ async def delete_item(item_id: int, db: DbSession, storage: Storage) -> None:
 MAX_ZIP_ITEMS = 2000
 
 
-@router.get("/items/zip")
-async def download_items_zip(
-    db: DbSession,
-    storage: Storage,
-    ids: Annotated[str, Query(min_length=1, max_length=20000, pattern=r"^\d+(,\d+)*$")],
-    name: Annotated[str, Query(max_length=100)] = "library",
+def _zip_response(
+    items: list[MediaItem], storage: LibraryStorage, name: str, empty_detail: str
 ) -> StreamingResponse:
-    """Selected files as one ZIP. A GET, so the browser saves it as a normal download."""
-    item_ids = list(dict.fromkeys(int(part) for part in ids.split(",")))
-    if len(item_ids) > MAX_ZIP_ITEMS:
-        raise HTTPException(status_code=422, detail=f"Maksimal {MAX_ZIP_ITEMS} file per ZIP")
-    found = {
-        item.id: item
-        for item in (await db.scalars(select(MediaItem).where(MediaItem.id.in_(item_ids)))).all()
-    }
-    items = [found[item_id] for item_id in item_ids if item_id in found]
+    """The files as one ZIP, streamed: see zipstream for why nothing is built on disk."""
     paths = [storage.blob_path(item.blob_sha256, item.blob.extension) for item in items]
     present = [(item, path) for item, path in zip(items, paths, strict=True) if path.exists()]
     if not present:
-        raise HTTPException(status_code=404, detail="File yang dipilih tidak ditemukan")
+        raise HTTPException(status_code=404, detail=empty_detail)
     names = zipstream.unique_names([zipstream.download_name(item) for item, _ in present])
     entries = [
         zipstream.ZipEntry(path, entry_name)
@@ -363,6 +351,44 @@ async def download_items_zip(
             "Cache-Control": "no-store",
         },
     )
+
+
+@router.get("/items/zip")
+async def download_items_zip(
+    db: DbSession,
+    storage: Storage,
+    ids: Annotated[str, Query(min_length=1, max_length=20000, pattern=r"^\d+(,\d+)*$")],
+    name: Annotated[str, Query(max_length=100)] = "library",
+) -> StreamingResponse:
+    """Selected files as one ZIP. A GET, so the browser saves it as a normal download."""
+    item_ids = list(dict.fromkeys(int(part) for part in ids.split(",")))
+    if len(item_ids) > MAX_ZIP_ITEMS:
+        raise HTTPException(status_code=422, detail=f"Maksimal {MAX_ZIP_ITEMS} file per ZIP")
+    found = {
+        item.id: item
+        for item in (await db.scalars(select(MediaItem).where(MediaItem.id.in_(item_ids)))).all()
+    }
+    items = [found[item_id] for item_id in item_ids if item_id in found]
+    return _zip_response(items, storage, name, "File yang dipilih tidak ditemukan")
+
+
+@router.get("/folders/{folder_id}/zip")
+async def download_folder_zip(folder_id: int, db: DbSession, storage: Storage) -> StreamingResponse:
+    """Everything in the folder as one ZIP named after it, oldest file first."""
+    folder = await db.get(Folder, folder_id)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Folder tidak ditemukan")
+    items = list(
+        (
+            await db.scalars(
+                select(MediaItem)
+                .where(MediaItem.folder_id == folder_id)
+                .order_by(MediaItem.created_at, MediaItem.id)
+            )
+        ).all()
+    )
+    today = datetime.now().astimezone().date().isoformat()
+    return _zip_response(items, storage, f"{folder.name} {today}", "Folder ini masih kosong")
 
 
 @router.get("/items/{item_id}/file")
