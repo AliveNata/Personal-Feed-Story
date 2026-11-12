@@ -13,7 +13,13 @@ from app.db import Blob, DownloadJob, Folder, MediaItem
 from app.errors import RateLimitedError, UserNotFoundError
 from app.library import service
 from app.library.jobs import JobRunner
-from app.library.storage import DownloadedFile, DownloadError, LibraryStorage, ProgressCallback
+from app.library.storage import (
+    DownloadedFile,
+    DownloadError,
+    LibraryStorage,
+    ProgressCallback,
+    _photo_thumbnail,
+)
 from app.library.types import ResolvedPost
 from tests.conftest import requires_db
 
@@ -373,3 +379,18 @@ async def test_random_previews_skip_repeated_files_and_respect_limit(
     assert len(next(iter(previews.values()))) == 2
     assert len(blobs) == 2
     assert len(next(iter(limited.values()))) == 1
+
+
+def test_photo_thumbnail_follows_exif_orientation(tmp_path: Path) -> None:
+    # Arrange: stored landscape, with an EXIF tag saying "turn 90 degrees" like phone portraits
+    source, target = tmp_path / "phone.jpg", tmp_path / "thumb.webp"
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    Image.new("RGB", (600, 300), "purple").save(source, exif=exif)
+
+    # Act
+    made = _photo_thumbnail(source, target)
+
+    # Assert
+    with Image.open(target) as thumbnail:
+        assert made and thumbnail.size[1] > thumbnail.size[0]

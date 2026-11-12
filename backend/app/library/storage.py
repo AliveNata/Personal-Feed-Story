@@ -17,7 +17,7 @@ from pathlib import Path
 
 from curl_cffi.requests import AsyncSession
 from curl_cffi.requests.exceptions import RequestException
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.library.types import MediaType
 
@@ -278,8 +278,11 @@ def _is_valid_image(path: Path) -> bool:
 def _photo_thumbnail(source: Path, target: Path) -> bool:
     try:
         with Image.open(source) as image:
-            image.thumbnail(THUMBNAIL_SIZE)
-            image.convert("RGB").save(target, "WEBP", quality=75)
+            # Phones store portrait shots sideways plus an EXIF turn, which browsers apply to the
+            # photo: turn the thumbnail the same way or the grid shows it lying down.
+            upright = ImageOps.exif_transpose(image)
+            upright.thumbnail(THUMBNAIL_SIZE)
+            upright.convert("RGB").save(target, "WEBP", quality=75)
     except (UnidentifiedImageError, OSError) as exc:
         logger.warning("photo thumbnail failed for %s: %s", source, exc)
         return False
