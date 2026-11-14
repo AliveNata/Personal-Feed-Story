@@ -158,6 +158,20 @@ docker compose up -d backend worker
 
 `up -d` recreates the containers with the new env. `restart` does not reload `.env`.
 
+### Import a folder of folders
+
+For collections too big for a 5 GB archive upload. Put the folders in `data/import`, one
+subfolder per Library folder (files inside nested folders count too), then:
+
+```bash
+docker compose exec backend python -m app.cli import-folders /data/import --category internasional
+```
+
+Each subfolder becomes a Library folder of the same name in that category (an existing folder of
+that name keeps its own category and gets the files added). Files are moved, not copied: imported
+files disappear from `data/import`, files that are not photos or videos stay behind. Copy your
+originals in if you want to keep them outside the app.
+
 ### Troubleshooting
 
 | Symptom | Fix |

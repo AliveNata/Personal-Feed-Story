@@ -3,12 +3,14 @@
 python -m app.cli create-user <username>
 python -m app.cli set-password <username>
 python -m app.cli ig-session --out /tmp/secrets/ig-session
+python -m app.cli import-folders /data/import --category internasional
 """
 
 import argparse
 import asyncio
 import getpass
 import sys
+from pathlib import Path
 
 from sqlalchemy import delete, select
 
@@ -57,6 +59,34 @@ async def _set_password(username: str, password: str) -> None:
     print(f"Password {username} diganti, semua sesi lama dihapus")
 
 
+async def _import_folders(root: Path, category: str) -> None:
+    from app.factory import build_storage
+    from app.library import folder_import
+
+    if not root.is_dir():
+        sys.exit(f"Folder {root} tidak ada. Copy folder-foldernya ke data/import dulu")
+    settings = get_settings()
+    engine = build_engine(settings.database_url)
+    try:
+        report = await folder_import.import_folders(
+            root,
+            "internasional" if category == "internasional" else "lokal",
+            build_session_factory(engine),
+            build_storage(settings),
+            on_file=lambda progress: print(f"\r{progress}    ", end="", flush=True),
+        )
+    finally:
+        await engine.dispose()
+    print()
+    for folder in report.folders:
+        print(
+            f"{folder.name}: {folder.saved} masuk, {folder.skipped} sudah ada, "
+            f"{folder.failed} gagal, {folder.ignored} bukan foto/video"
+        )
+    if report.loose_files:
+        print(f"{report.loose_files} file langsung di {root} dilewati: taruh di dalam subfolder")
+
+
 def _ig_session(out_path: str) -> None:
     """Build an instaloader session from browser cookies, skipping IG's login checkpoint."""
     import instaloader
@@ -84,7 +114,14 @@ def main() -> None:
     for name in ("create-user", "set-password"):
         sub.add_parser(name).add_argument("username")
     sub.add_parser("ig-session").add_argument("--out", default="/tmp/secrets/ig-session")
+    importer = sub.add_parser("import-folders")
+    importer.add_argument("root", type=Path)
+    importer.add_argument("--category", choices=["lokal", "internasional"], default="lokal")
     args = parser.parse_args()
+
+    if args.command == "import-folders":
+        asyncio.run(_import_folders(args.root, args.category))
+        return
 
     if args.command == "ig-session":
         _ig_session(args.out)
