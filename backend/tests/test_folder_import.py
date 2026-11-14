@@ -1,6 +1,7 @@
 import io
 from pathlib import Path
 
+import pytest
 from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -48,3 +49,22 @@ async def test_each_subfolder_becomes_a_library_folder_and_files_move_out(
         captions = sorted((await db.scalars(select(MediaItem.caption))).all())
     assert folders == {"Kendra Lust": "internasional", "Unknown": "internasional"}
     assert captions == ["a.jpg", "b.jpg", "c copy.jpg"]
+
+
+async def test_lost_import_folder_stops_with_import_interrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange: what Docker Desktop answers once its mount of a Windows drive drops
+    def no_device(_self: Path) -> list[Path]:
+        raise OSError(19, "No such device")
+
+    monkeypatch.setattr(Path, "iterdir", no_device)
+
+    # Act / Assert
+    with pytest.raises(folder_import.ImportInterrupted):
+        await folder_import.import_folders(
+            tmp_path,
+            "lokal",
+            None,
+            LibraryStorage(tmp_path / "library"),  # type: ignore[arg-type]
+        )

@@ -59,11 +59,23 @@ async def _set_password(username: str, password: str) -> None:
     print(f"Password {username} diganti, semua sesi lama dihapus")
 
 
+def _drive_lost_message(exc: BaseException) -> str:
+    return (
+        f"Folder import tidak bisa dibaca lagi ({exc}). Di Windows biasanya sambungan Docker ke "
+        "drive D: putus. Jalankan: docker compose down, wsl --shutdown, buka lagi Docker Desktop, "
+        "docker compose up -d, lalu ulangi perintah ini. File yang sudah masuk tidak akan dobel."
+    )
+
+
 async def _import_folders(root: Path, category: str) -> None:
     from app.factory import build_storage
     from app.library import folder_import
 
-    if not root.is_dir():
+    try:
+        exists = root.is_dir()
+    except OSError as exc:
+        sys.exit(_drive_lost_message(exc))
+    if not exists:
         sys.exit(f"Folder {root} tidak ada. Copy folder-foldernya ke data/import dulu")
     settings = get_settings()
     engine = build_engine(settings.database_url)
@@ -75,6 +87,9 @@ async def _import_folders(root: Path, category: str) -> None:
             build_storage(settings),
             on_file=lambda progress: print(f"\r{progress}    ", end="", flush=True),
         )
+    except folder_import.ImportInterrupted as exc:
+        print()
+        sys.exit(_drive_lost_message(exc.__cause__ or exc))
     finally:
         await engine.dispose()
     print()

@@ -28,6 +28,15 @@ logger = logging.getLogger(__name__)
 IMPORT_AUTHOR = "import"
 
 
+class ImportInterrupted(Exception):
+    """The import folder itself stopped being readable, so carrying on would fail every file."""
+
+
+# "Input/output error" and "No such device": on Docker Desktop for Windows this is the bind
+# mount to a drive dropping, not a bad file.
+MOUNT_LOST_ERRNOS = {5, 19}
+
+
 @dataclass
 class FolderReport:
     name: str
@@ -88,6 +97,9 @@ async def _import_one(
             else:
                 report.saved += 1
         except (ValueError, OSError) as exc:
+            mount_lost = isinstance(exc, OSError) and exc.errno in MOUNT_LOST_ERRNOS
+            if mount_lost and not _readable(folder_dir):
+                raise ImportInterrupted(str(exc)) from exc
             logger.warning("import %s/%s skipped: %s", folder_name, path.name, exc)
             report.failed += 1
         if on_file:
@@ -102,6 +114,14 @@ async def _import_one(
     return report
 
 
+def _readable(directory: Path) -> bool:
+    try:
+        directory.stat()
+        return True
+    except OSError:
+        return False
+
+
 async def import_folders(
     root: Path,
     category: service.FolderCategory,
@@ -110,12 +130,19 @@ async def import_folders(
     on_file: Callable[[str], None] | None = None,
 ) -> ImportReport:
     report = ImportReport()
-    for entry in sorted(root.iterdir()):
-        if entry.is_file():
+    try:
+        entries = sorted(root.iterdir())
+    except OSError as exc:
+        raise ImportInterrupted(str(exc)) from exc
+    for entry in entries:
+        try:
+            is_file = entry.is_file()
+            is_dir = entry.is_dir() and not entry.is_symlink()
+        except OSError as exc:
+            raise ImportInterrupted(str(exc)) from exc
+        if is_file:
             report.loose_files += 1
-        elif (
-            entry.is_dir() and not entry.is_symlink() and service.normalize_folder_name(entry.name)
-        ):
+        elif is_dir and service.normalize_folder_name(entry.name):
             report.folders.append(
                 await _import_one(entry, category, session_factory, storage, on_file)
             )
