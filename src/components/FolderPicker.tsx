@@ -1,6 +1,7 @@
 import React, { useId, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, FolderPlus } from 'lucide-react';
-import { Folder } from '../types';
+import { Folder, FolderCategory } from '../types';
+import { CATEGORIES, CATEGORY_LABELS } from '../utils/folderCategory';
 import { focusRing } from './ui';
 
 interface FolderPickerProps {
@@ -8,6 +9,9 @@ interface FolderPickerProps {
   value: string;
   folders: Folder[];
   onChange: (value: string) => void;
+  // Asked only while the typed name is a new folder: an existing folder keeps its category.
+  category: FolderCategory;
+  onCategoryChange: (category: FolderCategory) => void;
 }
 
 type Option = { kind: 'existing'; folder: Folder } | { kind: 'new'; name: string };
@@ -20,7 +24,14 @@ const folderMeta = (folder: Folder) => `${folder.photoCount} foto, ${folder.vide
  * Type a new folder name or pick an existing one. Replaces the native datalist, which looks
  * different in every browser and cannot show folder details. ARIA combobox pattern.
  */
-const FolderPicker: React.FC<FolderPickerProps> = ({ id, value, folders, onChange }) => {
+const FolderPicker: React.FC<FolderPickerProps> = ({
+  id,
+  value,
+  folders,
+  onChange,
+  category,
+  onCategoryChange,
+}) => {
   const listId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -35,6 +46,9 @@ const FolderPicker: React.FC<FolderPickerProps> = ({ id, value, folders, onChang
     // Folder names are matched case insensitively by the backend, so "liburan" reuses "Liburan".
     return query && !exact ? [{ kind: 'new', name: value.trim() }, ...matches] : matches;
   }, [folders, value]);
+
+  const query = normalize(value);
+  const isNewFolder = query !== '' && !folders.some((folder) => normalize(folder.name) === query);
 
   const choose = (option: Option) => {
     onChange(option.kind === 'existing' ? option.folder.name : option.name);
@@ -154,6 +168,34 @@ const FolderPicker: React.FC<FolderPickerProps> = ({ id, value, folders, onChang
             );
           })}
         </ul>
+      )}
+      {isNewFolder && (
+        <fieldset className="mt-2 flex flex-wrap items-center gap-2">
+          <legend className="sr-only">Kategori folder baru</legend>
+          <span aria-hidden="true" className="text-sm text-gray-700">
+            Folder baru masuk ke:
+          </span>
+          {CATEGORIES.map((option) => (
+            <label
+              key={option}
+              className={`flex min-h-[36px] cursor-pointer items-center rounded-full border px-3 text-sm font-medium has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-gray-900 has-[:focus-visible]:ring-offset-2 ${
+                category === option
+                  ? 'border-gray-900 bg-gray-900 text-white'
+                  : 'border-gray-300 bg-white text-gray-800 hover:bg-gray-100'
+              }`}
+            >
+              <input
+                type="radio"
+                name={`${id}-category`}
+                value={option}
+                checked={category === option}
+                onChange={() => onCategoryChange(option)}
+                className="sr-only"
+              />
+              {CATEGORY_LABELS[option]}
+            </label>
+          ))}
+        </fieldset>
       )}
     </div>
   );

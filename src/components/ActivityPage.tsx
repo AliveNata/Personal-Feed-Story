@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowRight, Download, FolderPlus, FolderX, MoveRight, Trash2, Upload } from 'lucide-react';
+import { ArrowLeftRight, ArrowRight, Download, FolderPlus, FolderX, MoveRight, Trash2, Upload } from 'lucide-react';
 import { LibraryAction, LibraryEvent } from '../types';
 import { ApiError, fetchActivity } from '../utils/api';
 import { Panel, focusRing, primaryButton, secondaryButton } from './ui';
@@ -18,6 +18,7 @@ const ACTION_ICONS: Record<LibraryAction, React.FC<{ className?: string }>> = {
   delete_item: Trash2,
   delete_folder: FolderX,
   create_folder: FolderPlus,
+  set_category: ArrowLeftRight,
 };
 
 const ACTION_LABELS: Record<LibraryAction, string> = {
@@ -27,6 +28,7 @@ const ACTION_LABELS: Record<LibraryAction, string> = {
   delete_item: 'Hapus file',
   delete_folder: 'Hapus folder',
   create_folder: 'Folder baru',
+  set_category: 'Ganti kategori',
 };
 
 const timeFormat = new Intl.DateTimeFormat('id', { dateStyle: 'medium', timeStyle: 'short' });
@@ -67,6 +69,12 @@ const Summary: React.FC<{ event: LibraryEvent }> = ({ event }) => {
       );
     case 'create_folder':
       return <>Folder {folder} dibuat</>;
+    case 'set_category':
+      return (
+        <>
+          Folder {folder} dipindah {event.detail}
+        </>
+      );
     case 'delete_folder':
       return (
         <>

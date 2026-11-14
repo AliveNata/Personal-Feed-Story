@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { DownloadJob, Folder, Platform } from '../types';
+import { DownloadJob, Folder, FolderCategory, Platform } from '../types';
 import { ApiError, createDownload, fetchFolders, fetchJob } from '../utils/api';
+import { readNewFolderCategory, saveNewFolderCategory } from '../utils/folderCategory';
 import FolderPicker from './FolderPicker';
 import { TrackedJob } from './downloadState';
 import { focusRing, primaryButton, secondaryButton } from './ui';
@@ -45,6 +46,7 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
   onJobUpdate,
 }) => {
   const [folderName, setFolderName] = useState('');
+  const [folderCategory, setFolderCategory] = useState<FolderCategory>(readNewFolderCategory);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [job, setJob] = useState<DownloadJob | null>(null);
   const [jobPostIds, setJobPostIds] = useState<string[]>([]);
@@ -96,6 +98,7 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
     try {
       const created = await createDownload({
         folderName,
+        folderCategory,
         platform,
         username,
         postIds: selectedIds,
@@ -152,7 +155,17 @@ const DownloadBar: React.FC<DownloadBarProps> = ({
               <label htmlFor="download-folder" className="block text-sm font-semibold text-gray-700 mb-1">
                 Simpan ke folder
               </label>
-              <FolderPicker id="download-folder" value={folderName} folders={folders} onChange={setFolderName} />
+              <FolderPicker
+                id="download-folder"
+                value={folderName}
+                folders={folders}
+                onChange={setFolderName}
+                category={folderCategory}
+                onCategoryChange={(category) => {
+                  setFolderCategory(category);
+                  saveNewFolderCategory(category);
+                }}
+              />
             </div>
             <div className="flex gap-2">
               <button type="submit" className={`flex-1 md:flex-none ${primaryButton}`} disabled={isSubmitting || isJobActive}>

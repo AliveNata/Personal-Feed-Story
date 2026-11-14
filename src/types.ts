@@ -100,11 +100,14 @@ export interface DownloadJob {
 
 export type MediaSource = 'post' | 'story' | 'upload';
 
+export type FolderCategory = 'lokal' | 'internasional';
+
 export interface Folder {
   id: number;
   name: string;
   // For the URL: /library/{slug}.
   slug: string;
+  category: FolderCategory;
   photoCount: number;
   videoCount: number;
   sizeBytes: number;
@@ -153,7 +156,14 @@ export interface FavoritesResponse {
   checking: boolean;
 }
 
-export type LibraryAction = 'download' | 'upload' | 'move' | 'delete_item' | 'delete_folder' | 'create_folder';
+export type LibraryAction =
+  | 'download'
+  | 'upload'
+  | 'move'
+  | 'delete_item'
+  | 'delete_folder'
+  | 'create_folder'
+  | 'set_category';
 
 export interface LibraryEvent {
   id: number;

@@ -23,7 +23,7 @@ export const Panel: React.FC<{ children: React.ReactNode; role?: string; tone?: 
   </div>
 );
 
-type IconTone = 'green' | 'red' | 'blue';
+type IconTone = 'green' | 'red' | 'blue' | 'gray';
 
 // Bare icons, so the shade follows what is behind them: dark shades on white, light shades
 // on a photo backdrop. Both keep at least 3:1 contrast, the minimum for icons.
@@ -31,6 +31,7 @@ const ICON_TONES: Record<IconTone, { light: string; dark: string }> = {
   green: { light: 'text-green-700 hover:bg-green-50', dark: 'text-green-400 hover:bg-white/10' },
   red: { light: 'text-red-700 hover:bg-red-50', dark: 'text-red-400 hover:bg-white/10' },
   blue: { light: 'text-blue-700 hover:bg-blue-50', dark: 'text-sky-400 hover:bg-white/10' },
+  gray: { light: 'text-gray-700 hover:bg-gray-100', dark: 'text-gray-100 hover:bg-white/10' },
 };
 
 interface IconActionProps {

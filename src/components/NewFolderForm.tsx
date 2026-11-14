@@ -1,14 +1,17 @@
 import React, { useRef, useState } from 'react';
-import { Folder } from '../types';
+import { Folder, FolderCategory } from '../types';
+import { CATEGORY_LABELS } from '../utils/folderCategory';
 import { ApiError, createFolder } from '../utils/api';
 import { focusRing, primaryButton, secondaryButton } from './ui';
 
 interface NewFolderFormProps {
+  // The Library tab the form was opened from.
+  category: FolderCategory;
   onCreated: (folder: Folder) => void;
   onCancel: () => void;
 }
 
-const NewFolderForm: React.FC<NewFolderFormProps> = ({ onCreated, onCancel }) => {
+const NewFolderForm: React.FC<NewFolderFormProps> = ({ category, onCreated, onCancel }) => {
   const [name, setName] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -19,7 +22,7 @@ const NewFolderForm: React.FC<NewFolderFormProps> = ({ onCreated, onCancel }) =>
     setIsSaving(true);
     setError(null);
     try {
-      onCreated(await createFolder(name));
+      onCreated(await createFolder(name, category));
     } catch (caught) {
       console.error('createFolder failed', caught);
       setError(caught instanceof ApiError ? caught.message : 'Gagal membuat folder');
@@ -38,7 +41,7 @@ const NewFolderForm: React.FC<NewFolderFormProps> = ({ onCreated, onCancel }) =>
       className="mb-4 rounded-lg bg-white p-4 shadow-md"
     >
       <label htmlFor="new-folder-name" className="mb-1 block text-sm font-semibold text-gray-700">
-        Nama folder baru
+        Nama folder baru di {CATEGORY_LABELS[category]}
       </label>
       <div className="flex flex-col gap-2 sm:flex-row">
         <input

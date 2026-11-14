@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Download, FolderPlus, Trash2 } from 'lucide-react';
-import { Folder } from '../types';
-import { ApiError, deleteFolder, fetchFolders, folderZipUrl, formatBytes } from '../utils/api';
+import { ArrowLeftRight, Download, FolderPlus, Trash2 } from 'lucide-react';
+import { Folder, FolderCategory } from '../types';
+import { ApiError, deleteFolder, fetchFolders, folderZipUrl, formatBytes, setFolderCategory } from '../utils/api';
+import { CATEGORIES, CATEGORY_LABELS, readLibraryTab, saveLibraryTab } from '../utils/folderCategory';
 import { FOLDER_SORT_OPTIONS, FolderSort, readFolderSort, saveFolderSort, sortFolders } from '../utils/folderSort';
 import FolderBackdrop from './FolderBackdrop';
 import NewFolderForm from './NewFolderForm';
@@ -19,7 +20,49 @@ const LibraryPage: React.FC = () => {
   const [uploadTarget, setUploadTarget] = useState<Folder | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [sort, setSort] = useState<FolderSort>(readFolderSort);
-  const folders = useMemo(() => (state.status === 'ready' ? sortFolders(state.folders, sort) : []), [state, sort]);
+  const [tab, setTab] = useState<FolderCategory>(readLibraryTab);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const allFolders = useMemo(() => (state.status === 'ready' ? state.folders : []), [state]);
+  const folders = useMemo(
+    () => sortFolders(allFolders.filter((folder) => folder.category === tab), sort),
+    [allFolders, tab, sort],
+  );
+  const tabCounts = useMemo(
+    () => ({
+      lokal: allFolders.filter((folder) => folder.category === 'lokal').length,
+      internasional: allFolders.filter((folder) => folder.category === 'internasional').length,
+    }),
+    [allFolders],
+  );
+
+  const chooseTab = (next: FolderCategory) => {
+    setTab(next);
+    saveLibraryTab(next);
+  };
+
+  const replaceFolder = (updated: Folder) =>
+    setState((previous) =>
+      previous.status === 'ready'
+        ? {
+            status: 'ready',
+            // Keep the random backdrop photos: the category answer carries none.
+            folders: previous.folders.map((folder) =>
+              folder.id === updated.id ? { ...updated, previewUrls: folder.previewUrls } : folder,
+            ),
+          }
+        : previous,
+    );
+
+  const handleCategoryChange = async (folder: Folder) => {
+    const next: FolderCategory = folder.category === 'lokal' ? 'internasional' : 'lokal';
+    setActionError(null);
+    try {
+      replaceFolder(await setFolderCategory(folder.id, next));
+    } catch (caught) {
+      console.error('setFolderCategory failed', caught);
+      setActionError(caught instanceof ApiError ? caught.message : 'Gagal memindah kategori folder');
+    }
+  };
 
   const load = useCallback((silent = false) => {
     if (!silent) setState({ status: 'loading' });
@@ -84,8 +127,34 @@ const LibraryPage: React.FC = () => {
         </div>
       </div>
 
+      <div role="tablist" aria-label="Kategori folder" className="mb-4 flex gap-1 border-b border-gray-300">
+        {CATEGORIES.map((category) => (
+          <button
+            key={category}
+            type="button"
+            role="tab"
+            id={`library-tab-${category}`}
+            aria-selected={tab === category}
+            onClick={() => chooseTab(category)}
+            className={`-mb-px min-h-[44px] border-b-2 px-4 text-sm font-semibold ${
+              tab === category ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-700 hover:text-gray-900'
+            } ${focusRing}`}
+          >
+            {CATEGORY_LABELS[category]}{' '}
+            <span className="font-normal text-gray-700">({tabCounts[category]})</span>
+          </button>
+        ))}
+      </div>
+
+      {actionError && (
+        <p role="alert" className="mb-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+          {actionError}
+        </p>
+      )}
+
       {isCreating && (
         <NewFolderForm
+          category={tab}
           onCancel={() => setIsCreating(false)}
           onCreated={(folder) => {
             setIsCreating(false);
@@ -127,7 +196,16 @@ const LibraryPage: React.FC = () => {
         </Panel>
       )}
 
-      {state.status === 'ready' && state.folders.length > 0 && (
+      {state.status === 'ready' && state.folders.length > 0 && folders.length === 0 && (
+        <Panel>
+          <p>
+            Belum ada folder {CATEGORY_LABELS[tab]}. Pakai Folder baru di tab ini, atau pindahkan folder dari tab
+            sebelah lewat ikon panah di barisnya.
+          </p>
+        </Panel>
+      )}
+
+      {folders.length > 0 && (
         <ul className="overflow-hidden bg-white rounded-lg shadow-md divide-y divide-gray-200">
           {folders.map((folder) => {
             const hasBackdrop = folder.previewUrls.length > 0;
@@ -170,6 +248,13 @@ const LibraryPage: React.FC = () => {
                       href={folderZipUrl(folder.id)}
                     />
                   )}
+                  <IconAction
+                    label={`Pindah ke ${CATEGORY_LABELS[folder.category === 'lokal' ? 'internasional' : 'lokal']}`}
+                    tone="gray"
+                    isOnDark={hasBackdrop}
+                    icon={<ArrowLeftRight className="h-5 w-5" aria-hidden="true" />}
+                    onClick={() => void handleCategoryChange(folder)}
+                  />
                   <ConfirmDelete
                     label="Hapus folder"
                     confirmText={`Hapus "${folder.name}" beserta semua isinya?`}

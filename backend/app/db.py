@@ -41,6 +41,8 @@ class Folder(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    # Library tab: "lokal" or "internasional".
+    category: Mapped[str] = mapped_column(String(20), default="lokal", server_default="lokal")
 
     items: Mapped[list["MediaItem"]] = relationship(
         back_populates="folder", cascade="all, delete-orphan", passive_deletes=True

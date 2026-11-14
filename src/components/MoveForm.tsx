@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Folder } from '../types';
+import { Folder, FolderCategory } from '../types';
+import { readNewFolderCategory, saveNewFolderCategory } from '../utils/folderCategory';
 import { ApiError, MoveResult, fetchFolders, moveItems } from '../utils/api';
 import FolderPicker from './FolderPicker';
 import { primaryButton, secondaryButton } from './ui';
@@ -17,6 +18,7 @@ interface MoveFormProps {
 const MoveForm: React.FC<MoveFormProps> = ({ itemIds, currentFolderId, inputId, onMoved, onCancel }) => {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [folderName, setFolderName] = useState('');
+  const [folderCategory, setFolderCategory] = useState<FolderCategory>(readNewFolderCategory);
   const [isMoving, setIsMoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,7 +34,7 @@ const MoveForm: React.FC<MoveFormProps> = ({ itemIds, currentFolderId, inputId, 
     setIsMoving(true);
     setError(null);
     try {
-      onMoved(await moveItems(itemIds, folderName));
+      onMoved(await moveItems(itemIds, folderName, folderCategory));
     } catch (caught) {
       console.error('moveItems failed', caught);
       setError(caught instanceof ApiError ? caught.message : 'Gagal memindahkan file');
@@ -48,7 +50,17 @@ const MoveForm: React.FC<MoveFormProps> = ({ itemIds, currentFolderId, inputId, 
         <label htmlFor={inputId} className="mb-1 block text-sm font-semibold text-gray-700">
           Pindahkan ke folder
         </label>
-        <FolderPicker id={inputId} value={folderName} folders={folders} onChange={setFolderName} />
+        <FolderPicker
+          id={inputId}
+          value={folderName}
+          folders={folders}
+          onChange={setFolderName}
+          category={folderCategory}
+          onCategoryChange={(category) => {
+            setFolderCategory(category);
+            saveNewFolderCategory(category);
+          }}
+        />
       </div>
       <div className="flex gap-2">
         <button type="submit" className={`flex-1 md:flex-none ${primaryButton}`} disabled={isMoving}>

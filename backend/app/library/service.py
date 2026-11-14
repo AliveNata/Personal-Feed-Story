@@ -4,7 +4,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import case, delete, func, select
 from sqlalchemy.dialects.postgresql import distinct_on
@@ -110,11 +110,17 @@ def normalize_folder_name(name: str) -> str:
     return " ".join(name.split())
 
 
-async def get_or_create_folder(db: AsyncSession, name: str) -> Folder:
+FolderCategory = Literal["lokal", "internasional"]
+
+
+async def get_or_create_folder(
+    db: AsyncSession, name: str, category: FolderCategory = "lokal"
+) -> Folder:
+    """The category only applies to a new folder: an existing one keeps its own."""
     clean = normalize_folder_name(name)
     folder = await db.scalar(select(Folder).where(func.lower(Folder.name) == clean.lower()))
     if folder is None:
-        folder = Folder(name=clean)
+        folder = Folder(name=clean, category=category)
         db.add(folder)
         await db.flush()
     return folder

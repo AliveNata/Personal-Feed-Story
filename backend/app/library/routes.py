@@ -42,6 +42,8 @@ Storage = Annotated[LibraryStorage, Depends(get_storage)]
 
 class DownloadRequest(CamelModel):
     folder_name: str = Field(min_length=1, max_length=100)
+    # Used only when folder_name is a new folder.
+    folder_category: service.FolderCategory = "lokal"
     platform: Platform
     username: str = Field(pattern=r"^@?[A-Za-z0-9._-]{1,100}$")
     post_ids: list[Annotated[str, Field(pattern=POST_ID_PATTERN)]] = Field(min_length=1)
@@ -86,6 +88,7 @@ class FolderResponse(CamelModel):
     name: str
     # For the URL: /library/{slug}.
     slug: str
+    category: service.FolderCategory
     photo_count: int
     video_count: int
     size_bytes: int
@@ -131,6 +134,7 @@ def _folder_response(
         id=summary.folder.id,
         name=summary.folder.name,
         slug=slug,
+        category="internasional" if summary.folder.category == "internasional" else "lokal",
         photo_count=summary.photo_count,
         video_count=summary.video_count,
         size_bytes=summary.size_bytes,
@@ -171,7 +175,7 @@ async def create_download(
     if len(post_ids) > limit:
         raise HTTPException(status_code=422, detail=f"Maksimal {limit} post per download")
 
-    folder = await service.get_or_create_folder(db, body.folder_name)
+    folder = await service.get_or_create_folder(db, body.folder_name, body.folder_category)
     job = await service.create_job(
         db, folder, body.platform, body.username.removeprefix("@"), post_ids
     )
@@ -195,6 +199,7 @@ async def get_job(
 
 class CreateFolderRequest(CamelModel):
     name: str = Field(min_length=1, max_length=100)
+    category: service.FolderCategory = "lokal"
 
     @field_validator("name")
     @classmethod
@@ -211,9 +216,32 @@ async def create_folder(body: CreateFolderRequest, db: DbSession) -> FolderRespo
     if existing is not None:
         # Names are unique without case, "bali" would silently reuse "Bali" otherwise.
         raise HTTPException(status_code=409, detail=f'Folder "{existing.name}" sudah ada')
-    folder = await service.get_or_create_folder(db, body.name)
+    folder = await service.get_or_create_folder(db, body.name, body.category)
     events.record(db, "create_folder", folder, 0)
     await db.commit()
+    summary = await service.get_folder_summary(db, folder.id)
+    assert summary is not None
+    return _folder_response(summary, (await _folder_slugs(db))[folder.id])
+
+
+class FolderCategoryRequest(CamelModel):
+    category: service.FolderCategory
+
+
+CATEGORY_LABELS = {"lokal": "Lokal", "internasional": "Internasional"}
+
+
+@router.put("/folders/{folder_id}/category", response_model=FolderResponse)
+async def set_folder_category(
+    folder_id: int, body: FolderCategoryRequest, db: DbSession
+) -> FolderResponse:
+    folder = await db.get(Folder, folder_id)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Folder tidak ditemukan")
+    if folder.category != body.category:
+        folder.category = body.category
+        events.record(db, "set_category", folder, 0, detail=f"ke {CATEGORY_LABELS[body.category]}")
+        await db.commit()
     summary = await service.get_folder_summary(db, folder.id)
     assert summary is not None
     return _folder_response(summary, (await _folder_slugs(db))[folder.id])
@@ -291,6 +319,7 @@ async def set_item_rotation(
 class MoveRequest(CamelModel):
     item_ids: list[int] = Field(min_length=1, max_length=500)
     folder_name: str = Field(min_length=1, max_length=100)
+    folder_category: service.FolderCategory = "lokal"
 
     @field_validator("folder_name")
     @classmethod
@@ -310,7 +339,7 @@ class MoveResponse(CamelModel):
 
 @router.post("/items/move", response_model=MoveResponse)
 async def move_items(body: MoveRequest, db: DbSession) -> MoveResponse:
-    target = await service.get_or_create_folder(db, body.folder_name)
+    target = await service.get_or_create_folder(db, body.folder_name, body.folder_category)
     result = await service.move_items(db, body.item_ids, target)
     return MoveResponse(
         folder_id=target.id, folder_name=target.name, moved=result.moved, merged=result.merged
@@ -566,7 +595,15 @@ async def lookup_downloaded(
 class LibraryEventResponse(CamelModel):
     id: int
     created_at: datetime
-    action: Literal["download", "upload", "move", "delete_item", "delete_folder", "create_folder"]
+    action: Literal[
+        "download",
+        "upload",
+        "move",
+        "delete_item",
+        "delete_folder",
+        "create_folder",
+        "set_category",
+    ]
     item_count: int
     folder_id: int | None
     folder_name: str

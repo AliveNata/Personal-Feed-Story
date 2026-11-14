@@ -560,3 +560,26 @@ async def test_whole_folder_downloads_as_one_zip(
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         assert archive.namelist() == ["a.jpg", "b.jpg"]
     assert empty_response.status_code == 404
+
+
+async def test_folder_category_defaults_to_lokal_and_can_change(client: httpx.AsyncClient) -> None:
+    # Arrange
+    await login(client)
+    lokal = (await client.post("/api/folders", json={"name": "Raneey"})).json()
+    luar = (
+        await client.post("/api/folders", json={"name": "Lisa", "category": "internasional"})
+    ).json()
+
+    # Act
+    moved = await client.put(
+        f"/api/folders/{lokal['id']}/category", json={"category": "internasional"}
+    )
+    invalid = await client.put(f"/api/folders/{lokal['id']}/category", json={"category": "asia"})
+    history = (await client.get("/api/activity")).json()["events"]
+
+    # Assert
+    assert (lokal["category"], luar["category"]) == ("lokal", "internasional")
+    assert moved.json()["category"] == "internasional"
+    assert invalid.status_code == 422
+    assert history[0]["action"] == "set_category"
+    assert history[0]["detail"] == "ke Internasional"

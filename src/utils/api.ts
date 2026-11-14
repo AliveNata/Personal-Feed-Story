@@ -8,6 +8,7 @@ import {
   FeedResponse,
   FreshMediaResponse,
   Folder,
+  FolderCategory,
   HighlightItemsResponse,
   HighlightsResponse,
   ReelsResponse,
@@ -99,6 +100,8 @@ export const logout = (): Promise<void> => request<void>('/api/auth/logout', { m
 
 export const createDownload = (body: {
   folderName: string;
+  // Used by the server only when folderName is a new folder.
+  folderCategory: FolderCategory;
   platform: Platform;
   username: string;
   postIds: string[];
@@ -109,8 +112,11 @@ export const fetchJob = (jobId: string): Promise<DownloadJob> =>
 
 export const fetchFolders = (): Promise<Folder[]> => request<Folder[]>('/api/folders');
 
-export const createFolder = (name: string): Promise<Folder> =>
-  request<Folder>('/api/folders', { method: 'POST', json: { name } });
+export const createFolder = (name: string, category: FolderCategory): Promise<Folder> =>
+  request<Folder>('/api/folders', { method: 'POST', json: { name, category } });
+
+export const setFolderCategory = (folderId: number, category: FolderCategory): Promise<Folder> =>
+  request<Folder>(`/api/folders/${folderId}/category`, { method: 'PUT', json: { category } });
 
 // A slug from the URL, or a numeric id from older links.
 export const fetchFolder = (folderKey: string): Promise<Folder> =>
@@ -231,8 +237,12 @@ export interface MoveResult {
   merged: number;
 }
 
-export const moveItems = (itemIds: number[], folderName: string): Promise<MoveResult> =>
-  request<MoveResult>('/api/items/move', { method: 'POST', json: { itemIds, folderName } });
+export const moveItems = (
+  itemIds: number[],
+  folderName: string,
+  folderCategory: FolderCategory,
+): Promise<MoveResult> =>
+  request<MoveResult>('/api/items/move', { method: 'POST', json: { itemIds, folderName, folderCategory } });
 
 const relativeTimeFormat = new Intl.RelativeTimeFormat('id', { numeric: 'auto' });
 const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
