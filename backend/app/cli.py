@@ -95,7 +95,8 @@ async def _import_folders(root: Path, category: str) -> None:
     print()
     for folder in report.folders:
         print(
-            f"{folder.name}: {folder.saved} masuk, {folder.skipped} sudah ada, "
+            f"{folder.name}: {folder.converted} diubah ke MP4, {folder.saved} masuk, "
+            f"{folder.skipped} sudah ada, "
             f"{folder.failed} gagal, {folder.ignored} bukan foto/video"
         )
     if report.loose_files:

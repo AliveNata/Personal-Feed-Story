@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.db import Folder
 from app.library import events, service
 from app.library.archive import _hash, media_files
-from app.library.storage import DownloadedFile, LibraryStorage, _is_valid_image
+from app.library.storage import DownloadedFile, LibraryStorage, _is_valid_image, _run_ffmpeg
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,49 @@ class ImportInterrupted(Exception):
 MOUNT_LOST_ERRNOS = {5, 19}
 
 
+# Video containers the library does not take as they are. Most hold H.264 and AAC already, so a
+# copy into MP4 is quick and lossless; anything else is encoded.
+CONVERT_EXTENSIONS = {
+    ".ts",
+    ".mts",
+    ".m2ts",
+    ".mkv",
+    ".avi",
+    ".wmv",
+    ".flv",
+    ".mpg",
+    ".mpeg",
+    ".3gp",
+}
+
+
+async def to_mp4(source: Path) -> Path | None:
+    """The MP4 next to the source, which is deleted once the MP4 exists. None when ffmpeg fails."""
+    target = source.with_suffix(".mp4")
+    if target.exists():
+        target = source.with_name(f"{source.stem} (converted).mp4")
+    copied = await _run_ffmpeg(
+        "-i", str(source), "-map", "0:v:0", "-map", "0:a:0?",
+        "-c", "copy", "-movflags", "+faststart", str(target),
+    )  # fmt: skip
+    if not copied:
+        target.unlink(missing_ok=True)
+        encoded = await _run_ffmpeg(
+            "-i", str(source), "-map", "0:v:0", "-map", "0:a:0?",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(target),
+        )  # fmt: skip
+        if not encoded:
+            target.unlink(missing_ok=True)
+            return None
+    source.unlink(missing_ok=True)
+    return target
+
+
 @dataclass
 class FolderReport:
     name: str
+    converted: int = 0
     saved: int = 0
     skipped: int = 0
     failed: int = 0
@@ -61,6 +101,19 @@ async def _import_one(
     on_file: Callable[[str], None] | None = None,
 ) -> FolderReport:
     report = FolderReport(name=folder_dir.name)
+    convertible = sorted(
+        path
+        for path in folder_dir.rglob("*")
+        if path.suffix.lower() in CONVERT_EXTENSIONS and path.is_file() and not path.is_symlink()
+    )
+    for source in convertible:
+        if on_file:
+            on_file(f"{folder_dir.name}: ubah {source.name} ke MP4")
+        if await to_mp4(source) is None:
+            logger.warning("import %s/%s: could not convert to mp4", folder_dir.name, source.name)
+            report.failed += 1
+        else:
+            report.converted += 1
     files, report.ignored = await asyncio.to_thread(media_files, folder_dir)
     if not files:
         return report

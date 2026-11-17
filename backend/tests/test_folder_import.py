@@ -1,4 +1,5 @@
 import io
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -68,3 +69,35 @@ async def test_lost_import_folder_stops_with_import_interrupted(
             None,
             LibraryStorage(tmp_path / "library"),  # type: ignore[arg-type]
         )
+
+
+@requires_db
+async def test_ts_and_wmv_videos_are_converted_to_mp4_then_imported(
+    tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    # Arrange: H.264 in MPEG-TS (copied as is) and WMV (needs encoding)
+    folder = tmp_path / "import" / "Nikki Benz"
+    folder.mkdir(parents=True)
+    for name, codecs in [
+        ("clip.ts", ["-c:v", "libx264", "-c:a", "aac", "-f", "mpegts"]),
+        ("old.wmv", ["-c:v", "wmv2", "-c:a", "wmav2"]),
+    ]:
+        subprocess.run(
+            ["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=1:size=160x120",
+             "-f", "lavfi", "-i", "sine=duration=1", "-shortest", *codecs, str(folder / name)],
+            check=True,
+        )  # fmt: skip
+    storage = LibraryStorage(tmp_path / "library")
+
+    # Act
+    report = await folder_import.import_folders(
+        tmp_path / "import", "internasional", session_factory, storage
+    )
+
+    # Assert
+    nikki = report.folders[0]
+    assert (nikki.converted, nikki.saved, nikki.failed) == (2, 2, 0)
+    assert list(folder.iterdir()) == []
+    async with session_factory() as db:
+        captions = sorted((await db.scalars(select(MediaItem.caption))).all())
+    assert captions == ["clip.mp4", "old.mp4"]

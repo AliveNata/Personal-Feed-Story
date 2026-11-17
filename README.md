@@ -169,7 +169,9 @@ docker compose exec backend python -m app.cli import-folders /data/import --cate
 
 Each subfolder becomes a Library folder of the same name in that category (an existing folder of
 that name keeps its own category and gets the files added). Files are moved, not copied: imported
-files disappear from `data/import`, files that are not photos or videos stay behind. Copy your
+files disappear from `data/import`, files that are not photos or videos stay behind. Videos in
+other containers (`.ts`, `.mkv`, `.avi`, `.wmv` and the like) are turned into MP4 first: copied
+without loss when the codecs allow it, encoded with H.264 otherwise. Copy your
 originals in if you want to keep them outside the app.
 
 ### Troubleshooting
