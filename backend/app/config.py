@@ -60,8 +60,9 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr = SecretStr("")
     anthropic_base_url: str = "https://api.anthropic.com"
     subtitle_translate_model: str = "claude-haiku-5-5"
-    # Audio is sent in pieces this long, each well under Groq's 25 MB upload cap.
-    subtitle_chunk_seconds: int = Field(default=1200, ge=60, le=3600)
+    # Audio is sent in pieces this long: well under Groq's 25 MB cap, and small enough that the
+    # progress bar moves on a short video too.
+    subtitle_chunk_seconds: int = Field(default=300, ge=60, le=3600)
 
 
 @lru_cache

@@ -420,12 +420,14 @@ const VideoControls: React.FC<VideoControlsProps> = ({
                 >
                   {subtitles.options.map((option) => {
                     const isChosen = option.choice === subtitles.choice;
-                    const note =
-                      option.state === 'queued' || option.state === 'running'
-                        ? 'lagi diterjemahin'
-                        : option.state === 'failed'
-                          ? 'gagal, klik lagi'
-                          : null;
+                    const isWorking = option.state === 'queued' || option.state === 'running';
+                    const note = isWorking
+                      ? option.progress === null
+                        ? 'nunggu antrean'
+                        : `lagi diterjemahin ${option.progress}%`
+                      : option.state === 'failed'
+                        ? 'gagal, klik lagi'
+                        : null;
                     return (
                       <button
                         key={option.choice}
@@ -442,7 +444,7 @@ const VideoControls: React.FC<VideoControlsProps> = ({
                         <span>{option.label}</span>
                         {note && (
                           <span className="ml-auto flex items-center gap-1 pl-3 text-xs text-white/60">
-                            {note === 'lagi diterjemahin' && (
+                            {isWorking && (
                               <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />
                             )}
                             {note}

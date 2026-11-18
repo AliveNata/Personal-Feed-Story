@@ -212,6 +212,8 @@ export interface SubtitleTrackState {
   track: SubtitleTrackName;
   state: SubtitleState;
   error: string | null;
+  // 0 to 99 while running, null while it waits in the queue.
+  progress: number | null;
 }
 
 export interface SubtitleInfo {

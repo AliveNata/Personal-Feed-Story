@@ -79,6 +79,10 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
   const subtitles = useSubtitles(item.id, isVideo);
   const isMakingSubtitles =
     subtitles.originalState === 'queued' || subtitles.originalState === 'running';
+  // Null while the job still waits behind others in the worker queue.
+  const subtitleProgress = isMakingSubtitles ? subtitles.originalProgress : null;
+  const subtitleStatusText =
+    subtitleProgress === null ? 'Subtitle nunggu antrean…' : `Bikin subtitle ${subtitleProgress}%`;
   const [isMoving, setIsMoving] = useState(false);
   useEffect(() => setIsMoving(false), [item.id]);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -280,17 +284,32 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
       <div ref={stageRef} className={`flex h-full flex-col ${isFullscreen ? 'bg-black' : ''}`}>
         {/* A fullscreen video keeps only its own controls, Back or Esc brings the toolbar back. */}
         <div
-          className={`flex items-center justify-between gap-2 p-3 text-white ${
+          className={`relative flex items-center justify-between gap-2 p-3 text-white ${
             isFullscreen && isVideo ? 'hidden' : ''
           }`}
         >
+          {subtitleProgress !== null && (
+            <div
+              role="progressbar"
+              aria-label="Progress subtitle"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={subtitleProgress}
+              className="absolute inset-x-0 bottom-0 h-1 bg-white/15"
+            >
+              <div
+                className="h-full bg-blue-500 transition-[width] duration-500 motion-reduce:transition-none"
+                style={{ width: `${subtitleProgress}%` }}
+              />
+            </div>
+          )}
           <div className="flex min-w-0 items-center gap-3">
             <span className="shrink-0 text-sm">
               {position} / {total}
             </span>
             {isMakingSubtitles && (
               <span role="status" className="hidden truncate text-xs text-white/70 sm:inline">
-                Lagi bikin subtitle…
+                {subtitleStatusText}
               </span>
             )}
             {subtitles.error && !isMakingSubtitles && (
@@ -305,15 +324,17 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
                 type="button"
                 onClick={subtitles.generate}
                 disabled={isMakingSubtitles}
-                aria-label={isMakingSubtitles ? 'Lagi bikin subtitle' : 'Generate subtitle'}
+                aria-label={isMakingSubtitles ? subtitleStatusText : 'Generate subtitle'}
                 title={
                   isMakingSubtitles
-                    ? 'Lagi bikin subtitle, bisa sambil nonton'
+                    ? `${subtitleStatusText}, bisa sambil nonton`
                     : 'Generate subtitle dari suara di video'
                 }
-                className={`${navButton} disabled:!opacity-100`}
+                className={`${navButton} relative disabled:!opacity-100`}
               >
-                {isMakingSubtitles ? (
+                {subtitleProgress !== null ? (
+                  <ProgressRing percent={subtitleProgress} />
+                ) : isMakingSubtitles ? (
                   <Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
                 ) : (
                   <Captions className="h-5 w-5" aria-hidden="true" />
@@ -574,3 +595,29 @@ function unlockOrientation(): void {
     console.info('orientation unlock not available here', error);
   }
 }
+
+const RING_RADIUS = 18;
+const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
+
+// Fills around the subtitle button, with the number in the middle so phones see it too.
+const ProgressRing: React.FC<{ percent: number }> = ({ percent }) => (
+  <>
+    <svg viewBox="0 0 44 44" className="absolute inset-0 h-full w-full -rotate-90" aria-hidden="true">
+      <circle cx="22" cy="22" r={RING_RADIUS} fill="none" strokeWidth="3" className="stroke-gray-300" />
+      <circle
+        cx="22"
+        cy="22"
+        r={RING_RADIUS}
+        fill="none"
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeDasharray={RING_LENGTH}
+        strokeDashoffset={RING_LENGTH * (1 - percent / 100)}
+        className="stroke-blue-600 transition-[stroke-dashoffset] duration-500 motion-reduce:transition-none"
+      />
+    </svg>
+    <span className="relative text-[11px] font-semibold tabular-nums" aria-hidden="true">
+      {percent}%
+    </span>
+  </>
+);

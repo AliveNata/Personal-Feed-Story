@@ -9,9 +9,11 @@ video stuck on "running".
 import asyncio
 import json
 import logging
+import math
 import re
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -118,12 +120,18 @@ class SubtitleStatus:
     def _key(self, sha256: str, track: Track) -> str:
         return f"subtitle:{sha256}:{track}"
 
-    def set(self, sha256: str, track: Track, state: StateName, error: str | None = None) -> None:
+    def set(
+        self,
+        sha256: str,
+        track: Track,
+        state: StateName,
+        error: str | None = None,
+        progress: int | None = None,
+    ) -> None:
         ttl = FAILED_TTL_SECONDS if state == "failed" else STATE_TTL_SECONDS
+        payload = {"state": state, "error": error, "progress": progress}
         try:
-            self._redis.set(
-                self._key(sha256, track), json.dumps({"state": state, "error": error}), ex=ttl
-            )
+            self._redis.set(self._key(sha256, track), json.dumps(payload), ex=ttl)
         except RedisError as exc:
             logger.warning("could not store subtitle state: %s", exc)
 
@@ -174,27 +182,34 @@ async def has_audio(source: Path) -> bool:
     return code == 0 and bool(out.strip())
 
 
+async def _audio_plan(source: Path, chunk_seconds: int) -> list[float]:
+    """Offsets of the pieces the audio is sent in."""
+    if not await has_audio(source):
+        raise SubtitleError("Video ini nggak ada suaranya")
+    duration = await media_duration(source)
+    return [float(offset) for offset in range(0, max(math.ceil(duration), 1), chunk_seconds)]
+
+
+async def _extract_chunk(source: Path, target: Path, offset: float, chunk_seconds: int) -> None:
+    code, _, err = await _run(
+        "ffmpeg", "-y", "-loglevel", "error", "-ss", f"{offset:.3f}", "-t", str(chunk_seconds),
+        "-i", str(source), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libopus",
+        "-b:a", AUDIO_BITRATE, str(target),
+    )  # fmt: skip
+    if code != 0:
+        logger.warning("audio extract failed at %.0fs: %s", offset, err[-300:])
+        raise SubtitleError("Audio video ini gagal diambil")
+
+
 async def extract_audio_chunks(
     source: Path, workdir: Path, chunk_seconds: int
 ) -> list[tuple[float, Path]]:
     """Speech friendly Opus pieces of the audio track, each with its offset in the video."""
-    if not await has_audio(source):
-        raise SubtitleError("Video ini nggak ada suaranya")
-    duration = await media_duration(source)
     chunks: list[tuple[float, Path]] = []
-    offset = 0.0
-    while offset < duration:
-        target = workdir / f"chunk-{len(chunks):03d}.ogg"
-        code, _, err = await _run(
-            "ffmpeg", "-y", "-loglevel", "error", "-ss", f"{offset:.3f}", "-t", str(chunk_seconds),
-            "-i", str(source), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libopus",
-            "-b:a", AUDIO_BITRATE, str(target),
-        )  # fmt: skip
-        if code != 0:
-            logger.warning("audio extract failed at %.0fs: %s", offset, err[-300:])
-            raise SubtitleError("Audio video ini gagal diambil")
+    for index, offset in enumerate(await _audio_plan(source, chunk_seconds)):
+        target = workdir / f"chunk-{index:03d}.ogg"
+        await _extract_chunk(source, target, offset, chunk_seconds)
         chunks.append((offset, target))
-        offset += chunk_seconds
     return chunks
 
 
@@ -263,18 +278,42 @@ def _speech_lines(segments: Any) -> list[Line]:
     return lines
 
 
+ProgressCallback = Callable[[int], None]
+
+
+def _ignore_progress(_percent: int) -> None:
+    return None
+
+
+# Share of each piece's time spent cutting the audio, the rest is the upload and Groq.
+EXTRACT_SHARE = 0.3
+
+
 async def transcribe_video(
-    source: Path, transcriber: Transcriber, chunk_seconds: int
+    source: Path,
+    transcriber: Transcriber,
+    chunk_seconds: int,
+    on_progress: ProgressCallback = _ignore_progress,
 ) -> Transcript:
+    offsets = await _audio_plan(source, chunk_seconds)
+    lines: list[Line] = []
+    languages: list[str] = []
+
+    def report(done: float) -> None:
+        # Capped below 100: the file is still to be written.
+        on_progress(min(int(done / len(offsets) * 100), 99))
+
     with tempfile.TemporaryDirectory(prefix="subtitle-") as tmp:
-        chunks = await extract_audio_chunks(source, Path(tmp), chunk_seconds)
-        lines: list[Line] = []
-        languages: list[str] = []
-        for offset, path in chunks:
+        for index, offset in enumerate(offsets):
+            path = Path(tmp) / f"chunk-{index:03d}.ogg"
+            await _extract_chunk(source, path, offset, chunk_seconds)
+            report(index + EXTRACT_SHARE)
             language, chunk_lines = await transcriber.transcribe(path)
+            path.unlink(missing_ok=True)
             if language and chunk_lines:
                 languages.append(language)
             lines.extend(Line(x.start + offset, x.end + offset, x.text) for x in chunk_lines)
+            report(index + 1)
     # The language heard most across the pieces, not the first piece, which may be an intro song.
     language = max(set(languages), key=languages.count) if languages else None
     return Transcript(language, lines)
@@ -349,7 +388,10 @@ def _parse_lines(text: str, expected: int) -> list[str]:
 
 
 async def translate_transcript(
-    transcript: Transcript, target: TranslationTarget, translator: Translator
+    transcript: Transcript,
+    target: TranslationTarget,
+    translator: Translator,
+    on_progress: ProgressCallback = _ignore_progress,
 ) -> Transcript:
     if transcript.language == target:
         return Transcript(target, transcript.lines)
@@ -364,6 +406,7 @@ async def translate_transcript(
             # line in the spoken language.
             logger.warning("translation batch at line %d kept original: %s", start, exc)
             translated.extend(batch)
+        on_progress(min(int(len(translated) / len(texts) * 100), 99))
     lines = [
         Line(line.start, line.end, text or line.text)
         for line, text in zip(transcript.lines, translated, strict=True)
@@ -382,9 +425,13 @@ async def run_transcription(
     transcriber: Transcriber,
     chunk_seconds: int,
 ) -> None:
-    status.set(sha256, "original", "running")
+    status.set(sha256, "original", "running", progress=0)
+
+    def report(percent: int) -> None:
+        status.set(sha256, "original", "running", progress=percent)
+
     try:
-        transcript = await transcribe_video(video, transcriber, chunk_seconds)
+        transcript = await transcribe_video(video, transcriber, chunk_seconds, report)
         files.save(sha256, "original", transcript)
     except SubtitleError as exc:
         status.set(sha256, "original", "failed", str(exc))
@@ -406,12 +453,17 @@ async def run_translation(
     status: SubtitleStatus,
     translator: Translator,
 ) -> None:
-    status.set(sha256, target, "running")
+    status.set(sha256, target, "running", progress=0)
+
+    def report(percent: int) -> None:
+        status.set(sha256, target, "running", progress=percent)
+
     try:
         original = files.load(sha256, "original")
         if original is None:
             raise SubtitleError("Subtitle asli belum ada, generate dulu")
-        files.save(sha256, target, await translate_transcript(original, target, translator))
+        translated = await translate_transcript(original, target, translator, report)
+        files.save(sha256, target, translated)
     except SubtitleError as exc:
         status.set(sha256, target, "failed", str(exc))
         return

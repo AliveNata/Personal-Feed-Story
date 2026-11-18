@@ -122,6 +122,31 @@ async def test_transcript_lines_are_shifted_by_their_piece_offset(tmp_path: Path
     ]
 
 
+async def test_progress_climbs_per_piece_and_stops_short_of_done(tmp_path: Path) -> None:
+    # Arrange
+    video = make_video(tmp_path / "clip.mp4", seconds=4)
+    seen: list[int] = []
+
+    # Act
+    await subtitles.transcribe_video(video, FakeTranscriber(), 2, seen.append)
+
+    # Assert
+    assert seen == [15, 50, 65, 99]
+
+
+async def test_translation_progress_follows_the_batches() -> None:
+    # Arrange
+    count = subtitles.TRANSLATE_BATCH * 2
+    original = Transcript("en", [Line(i, i + 1, f"line {i}") for i in range(count)])
+    seen: list[int] = []
+
+    # Act
+    await subtitles.translate_transcript(original, "id", FakeTranslator(), seen.append)
+
+    # Assert
+    assert seen == [50, 99]
+
+
 @respx.mock
 async def test_groq_drops_non_speech_and_retries_after_rate_limit(tmp_path: Path) -> None:
     # Arrange
@@ -258,6 +283,7 @@ async def test_failed_job_keeps_a_readable_error(tmp_path: Path) -> None:
     assert status.get("abc", "original") == {
         "state": "failed",
         "error": "Video ini nggak ada suaranya",
+        "progress": None,
     }
     assert not files.has("abc", "original")
 

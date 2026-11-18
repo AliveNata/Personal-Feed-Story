@@ -14,7 +14,7 @@ import {
 } from '../utils/api';
 import { SubtitleChoice, readSubtitleChoice, saveSubtitleChoice } from '../utils/viewerPrefs';
 
-const POLL_MS = 3000;
+const POLL_MS = 2000;
 
 const LANGUAGE_NAMES: Record<string, string> = {
   en: 'Inggris', id: 'Indonesia', ms: 'Melayu', jw: 'Jawa', su: 'Sunda', ja: 'Jepang',
@@ -30,6 +30,7 @@ export interface SubtitleOption {
   choice: SubtitleChoice;
   label: string;
   state: SubtitleState;
+  progress: number | null;
 }
 
 export interface SubtitleControls {
@@ -69,6 +70,11 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
     };
   }, [itemId, isVideo]);
 
+  const progressOf = useCallback(
+    (track: SubtitleTrackName): number | null =>
+      info?.tracks.find((entry) => entry.track === track)?.progress ?? null,
+    [info],
+  );
   const stateOf = useCallback(
     (track: SubtitleTrackName): SubtitleState =>
       info?.tracks.find((entry) => entry.track === track)?.state ?? 'none',
@@ -156,11 +162,23 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
   const controls = useMemo((): SubtitleControls | null => {
     if (originalState !== 'ready') return null;
     const options: SubtitleOption[] = [
-      { choice: 'off', label: 'Mati', state: 'ready' },
-      { choice: 'original', label: `Asli (${languageName(language)})`, state: 'ready' },
+      { choice: 'off', label: 'Mati', state: 'ready', progress: null },
+      {
+        choice: 'original',
+        label: `Asli (${languageName(language)})`,
+        state: 'ready',
+        progress: null,
+      },
     ];
-    if (language !== 'en') options.push({ choice: 'en', label: 'English', state: stateOf('en') });
-    if (language !== 'id') options.push({ choice: 'id', label: 'Indonesia', state: stateOf('id') });
+    const translations: [SubtitleTarget, string][] = [
+      ['en', 'English'],
+      ['id', 'Indonesia'],
+    ];
+    for (const [target, label] of translations) {
+      if (language !== target) {
+        options.push({ choice: target, label, state: stateOf(target), progress: progressOf(target) });
+      }
+    }
     const shownChoice: SubtitleChoice = choice === language ? 'original' : choice;
     return {
       options,
@@ -168,7 +186,7 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
       onChoose: choose,
       lines: shownTrack ? (tracks[shownTrack] ?? null) : null,
     };
-  }, [originalState, language, stateOf, choice, choose, shownTrack, tracks]);
+  }, [originalState, language, stateOf, progressOf, choice, choose, shownTrack, tracks]);
 
   const originalError = info?.tracks.find((entry) => entry.track === 'original')?.error ?? null;
   const shownError = shownTrack
@@ -178,6 +196,7 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
   return {
     // Null for photos and until the first answer arrives.
     originalState: isVideo && info ? originalState : null,
+    originalProgress: progressOf('original'),
     error: error ?? originalError ?? shownError,
     generate,
     controls,

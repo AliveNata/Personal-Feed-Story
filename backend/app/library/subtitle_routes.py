@@ -43,6 +43,8 @@ class TrackState(CamelModel):
     track: Track
     state: Literal["none", "queued", "running", "failed", "ready"]
     error: str | None = None
+    # 0 to 99 while running, None before the worker picks the job up.
+    progress: int | None = None
 
 
 class SubtitleInfo(CamelModel):
@@ -82,7 +84,14 @@ def _info(sha256: str, files: SubtitleFiles, status: SubtitleStatus) -> Subtitle
         if raw is None:
             tracks.append(TrackState(track=track, state="none"))
         else:
-            tracks.append(TrackState(track=track, state=raw["state"], error=raw.get("error")))
+            tracks.append(
+                TrackState(
+                    track=track,
+                    state=raw["state"],
+                    error=raw.get("error"),
+                    progress=raw.get("progress"),
+                )
+            )
     original = files.load(sha256, "original")
     return SubtitleInfo(language=original.language if original else None, tracks=tracks)
 
