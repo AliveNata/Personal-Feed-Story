@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_db, require_user
 from app.config import get_settings
 from app.db import MediaItem
+from app.library.ai_quota import QuotaStore
 from app.library.routes import get_queue, get_storage
 from app.library.storage import LibraryStorage
 from app.library.subtitles import (
@@ -283,3 +284,41 @@ async def edit_subtitle_line(
     except SubtitleError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _track_response(track, transcript)
+
+
+class QuotaLimit(CamelModel):
+    resource: str
+    limit: str | None = None
+    remaining: str | None = None
+    reset: str | None = None
+
+
+class QuotaEntry(CamelModel):
+    provider: Literal["groq", "anthropic"]
+    scope: Literal["transcribe", "translate"]
+    model: str
+    limits: list[QuotaLimit]
+    updated_at: str
+
+
+class AiQuota(CamelModel):
+    groq_configured: bool
+    anthropic_configured: bool
+    # Last known limits per provider and job, from the headers of the latest call.
+    entries: list[QuotaEntry]
+
+
+def get_quota_store(request: Request) -> QuotaStore:
+    store: QuotaStore = request.app.state.ai_quota
+    return store
+
+
+@router.get("/ai-quota", response_model=AiQuota)
+async def get_ai_quota(
+    store: Annotated[QuotaStore, Depends(get_quota_store)], claude: ClaudeAvailable
+) -> AiQuota:
+    return AiQuota(
+        groq_configured=bool(get_settings().groq_api_key.get_secret_value()),
+        anthropic_configured=claude,
+        entries=[QuotaEntry.model_validate(entry) for entry in store.all()],
+    )

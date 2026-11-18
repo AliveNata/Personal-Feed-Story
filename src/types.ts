@@ -239,3 +239,25 @@ export interface SubtitleTrack {
   // Positions of lines changed by hand.
   edited: number[];
 }
+
+export interface AiQuotaLimit {
+  resource: string;
+  limit: string | null;
+  remaining: string | null;
+  reset: string | null;
+}
+
+export interface AiQuotaEntry {
+  provider: 'groq' | 'anthropic';
+  scope: 'transcribe' | 'translate';
+  model: string;
+  limits: AiQuotaLimit[];
+  updatedAt: string;
+}
+
+export interface AiQuota {
+  groqConfigured: boolean;
+  anthropicConfigured: boolean;
+  // Last known limits, from the latest call per provider and job.
+  entries: AiQuotaEntry[];
+}

@@ -1,4 +1,5 @@
 import {
+  AiQuota,
   StoriesResponse,
   PlatformSessionStatus,
   ActivityResponse,
@@ -341,6 +342,8 @@ export const selectionDownloadUrl = (itemIds: number[], folderName: string): str
 
 export const setItemRotation = (itemId: number, rotation: Rotation): Promise<MediaItem> =>
   request<MediaItem>(`/api/items/${itemId}/rotation`, { method: 'PUT', json: { rotation } });
+
+export const fetchAiQuota = (): Promise<AiQuota> => request<AiQuota>('/api/ai-quota');
 
 export const fetchSubtitleInfo = (itemId: number): Promise<SubtitleInfo> =>
   request<SubtitleInfo>(`/api/items/${itemId}/subtitles`);

@@ -7,6 +7,7 @@ import {
   formatRelativeTime,
   savePlatformSession,
 } from '../utils/api';
+import AiQuotaCard from './AiQuotaCard';
 import { Panel, focusRing, primaryButton, secondaryButton } from './ui';
 
 interface PlatformGuide {
@@ -281,6 +282,9 @@ const SessionPage: React.FC = () => {
           ))}
         </div>
       )}
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <AiQuotaCard />
+      </div>
     </div>
   );
 };

@@ -28,6 +28,7 @@ from app.factory import build_sources, build_storage
 from app.favorites import routes as favorites_routes
 from app.library import routes as library_routes
 from app.library import subtitle_routes
+from app.library.ai_quota import QuotaStore
 from app.library.archive import ImportStore
 from app.library.subtitles import SubtitleFiles, SubtitleStatus
 from app.library.types import MediaResolver
@@ -84,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.import_store = ImportStore(sync_redis)
     app.state.subtitle_files = SubtitleFiles(settings.library_dir)
     app.state.subtitle_status = SubtitleStatus(sync_redis)
+    app.state.ai_quota = QuotaStore(sync_redis)
     app.state.budget = sources.budget
     app.state.sources = {"tiktok": sources.tiktok, "instagram": sources.instagram}
     try:

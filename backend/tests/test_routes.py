@@ -688,3 +688,31 @@ async def test_translation_can_be_redone_with_claude_only_when_its_key_is_set(
     assert (redo_id["state"], redo_id["translator"]) == ("queued", "groq")
     failed_id = next(t for t in after_failure.json()["tracks"] if t["track"] == "id")
     assert (failed_id["state"], failed_id["error"]) == ("ready", "Claude error 500")
+
+
+async def test_ai_quota_lists_the_last_known_limits(client: httpx.AsyncClient) -> None:
+    # Arrange
+    from app.library.ai_quota import QuotaStore
+
+    await login(client)
+    store = QuotaStore(fakeredis.FakeRedis())
+    app.state.ai_quota = store
+    headers = {"x-ratelimit-limit-requests": "2000", "x-ratelimit-remaining-requests": "10"}
+    store.record("groq", "transcribe", "whisper-large-v3", httpx.Response(200, headers=headers))
+
+    # Act
+    response = await client.get("/api/ai-quota")
+
+    # Assert
+    body = response.json()
+    assert body["anthropicConfigured"] is False
+    entry = body["entries"][0]
+    assert (entry["provider"], entry["scope"], entry["model"]) == (
+        "groq",
+        "transcribe",
+        "whisper-large-v3",
+    )
+    assert entry["limits"] == [
+        {"resource": "requests", "limit": "2000", "remaining": "10", "reset": None}
+    ]
+    assert entry["updatedAt"]

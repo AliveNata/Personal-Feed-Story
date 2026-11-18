@@ -16,15 +16,16 @@ from app.config import get_settings
 from app.db import build_engine, build_session_factory
 from app.factory import build_sources, build_storage
 from app.favorites import service as favorites
+from app.library.ai_quota import QuotaStore
 from app.library.archive import ImportStore, run_import
 from app.library.jobs import JobRunner
 from app.library.progress import RedisProgress
 from app.library.subtitles import (
-    ClaudeTranslator,
     GroqTranscriber,
     SubtitleFiles,
     SubtitleStatus,
     TranslationTarget,
+    build_claude,
     build_translator,
     run_transcription,
     run_translation,
@@ -60,20 +61,17 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["engine"] = engine
     ctx["subtitle_files"] = SubtitleFiles(settings.library_dir)
     ctx["subtitle_status"] = SubtitleStatus(redis)
+    quota = QuotaStore(redis)
     ctx["transcriber"] = GroqTranscriber(
         http_client,
         settings.groq_api_key.get_secret_value(),
         settings.groq_transcribe_model,
         settings.groq_base_url,
+        quota,
     )
-    ctx["translator"] = build_translator(settings, http_client)
+    ctx["translator"] = build_translator(settings, http_client, quota)
     # Asked for per video, to make a Groq translation more natural.
-    ctx["claude"] = ClaudeTranslator(
-        http_client,
-        settings.anthropic_api_key.get_secret_value(),
-        settings.claude_translate_model,
-        settings.anthropic_base_url,
-    )
+    ctx["claude"] = build_claude(settings, http_client, quota)
     ctx["http_client"] = http_client
     ctx["runner"] = JobRunner(
         build_session_factory(engine),

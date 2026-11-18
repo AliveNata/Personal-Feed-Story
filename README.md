@@ -198,6 +198,10 @@ Put the key in `backend/.env`, then `docker compose up -d backend worker`:
 GROQ_API_KEY=gsk_...   # console.groq.com, free tier is enough for personal use
 ```
 
+The Session page shows the remaining Groq and Anthropic rate limits, as reported by their latest
+answers (so they refresh with each subtitle job). The Anthropic credit balance has no API, check it
+on the console billing page.
+
 The audio leaves your machine (to Groq). With Claude as translator, only the text goes to Anthropic. Parts with
 music and no speech are left without subtitles. Subtitle jobs wait in the same queue as downloads,
 so a long download job delays them.
@@ -266,6 +270,7 @@ Login required:
 | `POST /api/items/{id}/subtitles/{en\|id}/redo` | Translates again, keeping lines edited by hand |
 | `GET /api/items/{id}/subtitles/{track}` | Timed lines of a finished track |
 | `PUT /api/items/{id}/subtitles/{track}/lines/{index}` | `{text}` saves a line edited by hand |
+| `GET /api/ai-quota` | Last known Groq and Anthropic rate limits |
 
 Errors come back as `{"detail": "..."}`:
 

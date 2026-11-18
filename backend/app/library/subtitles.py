@@ -22,6 +22,8 @@ import httpx
 from redis import Redis
 from redis.exceptions import RedisError
 
+from app.library.ai_quota import QuotaStore
+
 if TYPE_CHECKING:
     from app.config import Settings
 
@@ -254,6 +256,7 @@ TRANSLATE_FALLBACKS = ("openai/gpt-oss-120b", "llama-3.1-8b-instant")
 
 
 def _groq_message(response: httpx.Response) -> str:
+    # Groq and Anthropic both answer errors as {"error": {"message": ...}}.
     try:
         message = response.json().get("error", {}).get("message", "")
     except ValueError:
@@ -265,12 +268,15 @@ async def _call_groq(
     send: Callable[[str], Awaitable[httpx.Response]],
     models: list[str],
     step: str,
+    record: Callable[[str, httpx.Response], None] | None = None,
 ) -> httpx.Response:
     """Send with each model in turn until one exists, retrying rate limits along the way."""
     last_error = ""
     for model in dict.fromkeys(models):
         for attempt in range(GROQ_RETRIES):
             response = await send(model)
+            if record is not None:
+                record(model, response)
             if response.status_code == 429 and attempt < GROQ_RETRIES - 1:
                 wait = _retry_after(response, default=20 * (attempt + 1))
                 logger.info("groq rate limited, waiting %.0fs", wait)
@@ -296,11 +302,23 @@ async def _call_groq(
 
 
 class GroqTranscriber:
-    def __init__(self, client: httpx.AsyncClient, api_key: str, model: str, base_url: str) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        api_key: str,
+        model: str,
+        base_url: str,
+        quota: QuotaStore | None = None,
+    ) -> None:
+        self._quota = quota
         self._client = client
         self._api_key = api_key
         self._models = [model, *TRANSCRIBE_FALLBACKS]
         self._url = f"{base_url.rstrip('/')}/audio/transcriptions"
+
+    def _record(self, model: str, response: httpx.Response) -> None:
+        if self._quota is not None:
+            self._quota.record("groq", "transcribe", model, response)
 
     async def transcribe(self, audio: Path) -> tuple[str | None, list[Line]]:
         if not self._api_key:
@@ -321,7 +339,8 @@ class GroqTranscriber:
                     timeout=300,
                 )
 
-        body = (await _call_groq(send, self._models, "transkrip")).json()
+        response = await _call_groq(send, self._models, "transkrip", self._record)
+        body = response.json()
         return normalize_language(body.get("language")), _speech_lines(body.get("segments"))
 
 
@@ -411,11 +430,23 @@ class GroqTranslator:
 
     name = "groq"
 
-    def __init__(self, client: httpx.AsyncClient, api_key: str, model: str, base_url: str) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        api_key: str,
+        model: str,
+        base_url: str,
+        quota: QuotaStore | None = None,
+    ) -> None:
+        self._quota = quota
         self._client = client
         self._api_key = api_key
         self._models = [model, *TRANSLATE_FALLBACKS]
         self._url = f"{base_url.rstrip('/')}/chat/completions"
+
+    def _record(self, model: str, response: httpx.Response) -> None:
+        if self._quota is not None:
+            self._quota.record("groq", "translate", model, response)
 
     async def translate(self, texts: list[str], target: TranslationTarget) -> dict[int, str]:
         if not self._api_key:
@@ -434,7 +465,7 @@ class GroqTranslator:
                 timeout=180,
             )
 
-        response = await _call_groq(send, self._models, "terjemahan")
+        response = await _call_groq(send, self._models, "terjemahan", self._record)
         choices = response.json().get("choices") or [{}]
         content = choices[0].get("message", {}).get("content") or ""
         return _parse_numbered(content, len(texts))
@@ -443,11 +474,23 @@ class GroqTranslator:
 class ClaudeTranslator:
     name = "claude"
 
-    def __init__(self, client: httpx.AsyncClient, api_key: str, model: str, base_url: str) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        api_key: str,
+        model: str,
+        base_url: str,
+        quota: QuotaStore | None = None,
+    ) -> None:
+        self._quota = quota
         self._client = client
         self._api_key = api_key
         self._model = model
         self._url = f"{base_url.rstrip('/')}/v1/messages"
+
+    def _record(self, response: httpx.Response) -> None:
+        if self._quota is not None:
+            self._quota.record("anthropic", "translate", self._model, response)
 
     async def translate(self, texts: list[str], target: TranslationTarget) -> dict[int, str]:
         if not self._api_key:
@@ -467,11 +510,15 @@ class ClaudeTranslator:
             },
             timeout=180,
         )
+        self._record(response)
         if response.status_code in (401, 403):
             raise SubtitleError("ANTHROPIC_API_KEY ditolak, cek lagi key-nya")
         if response.status_code >= 400:
-            logger.warning("claude error %s: %s", response.status_code, response.text[:500])
-            raise SubtitleError(f"Claude error {response.status_code}")
+            message = _groq_message(response)
+            logger.warning("claude error %s: %s", response.status_code, message)
+            if "credit balance" in message.lower():
+                raise SubtitleError("Saldo kredit Anthropic habis, top up di console")
+            raise SubtitleError(f"Claude error {response.status_code}: {message}")
         body = response.json()
         text = "".join(
             block.get("text", "")
@@ -481,19 +528,29 @@ class ClaudeTranslator:
         return _parse_numbered(text, len(texts))
 
 
-def build_translator(settings: "Settings", client: httpx.AsyncClient) -> Translator:
+def build_claude(
+    settings: "Settings", client: httpx.AsyncClient, quota: QuotaStore | None = None
+) -> "ClaudeTranslator":
+    return ClaudeTranslator(
+        client,
+        settings.anthropic_api_key.get_secret_value(),
+        settings.claude_translate_model,
+        settings.anthropic_base_url,
+        quota,
+    )
+
+
+def build_translator(
+    settings: "Settings", client: httpx.AsyncClient, quota: QuotaStore | None = None
+) -> Translator:
     if settings.subtitle_translator == "anthropic":
-        return ClaudeTranslator(
-            client,
-            settings.anthropic_api_key.get_secret_value(),
-            settings.claude_translate_model,
-            settings.anthropic_base_url,
-        )
+        return build_claude(settings, client, quota)
     return GroqTranslator(
         client,
         settings.groq_api_key.get_secret_value(),
         settings.groq_translate_model,
         settings.groq_base_url,
+        quota,
     )
 
 
