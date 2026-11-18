@@ -262,7 +262,7 @@ def _groq_message(response: httpx.Response) -> str:
         message = response.json().get("error", {}).get("message", "")
     except ValueError:
         message = response.text
-    return str(message)[:160]
+    return str(message)[:400]
 
 
 async def _call_groq(
@@ -500,9 +500,11 @@ class ClaudeTranslator:
         base_url: str,
         quota: QuotaStore | None = None,
         spend: ClaudeSpend | None = None,
+        workspace_id: str = "",
     ) -> None:
         self._quota = quota
         self._spend = spend
+        self._workspace_id = workspace_id
         self._client = client
         self._api_key = api_key
         self._model = model
@@ -527,6 +529,8 @@ class ClaudeTranslator:
                 "x-api-key": self._api_key,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
+                # Needed only for a key that is not tied to one workspace.
+                **({"anthropic-workspace-id": self._workspace_id} if self._workspace_id else {}),
             },
             json={
                 "model": self._model,
@@ -543,6 +547,11 @@ class ClaudeTranslator:
             logger.warning("claude error %s: %s", response.status_code, message)
             if "credit balance" in message.lower():
                 raise SubtitleError("Saldo kredit Anthropic habis, top up di console")
+            if "workspace" in message.lower() and not self._workspace_id:
+                raise SubtitleError(
+                    "Key Anthropic ini belum terikat ke workspace. Bikin key di dalam workspace "
+                    "di console, atau isi ANTHROPIC_WORKSPACE_ID di backend/.env"
+                )
             raise SubtitleError(f"Claude error {response.status_code}: {message}")
         body = response.json()
         usage = body.get("usage") or {}
@@ -580,6 +589,7 @@ def build_claude(
         settings.anthropic_base_url,
         quota,
         spend,
+        settings.anthropic_workspace_id,
     )
 
 

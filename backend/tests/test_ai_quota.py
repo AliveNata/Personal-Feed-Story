@@ -158,3 +158,37 @@ async def test_claude_records_its_usage_and_stops_at_the_budget() -> None:
     assert first == {0: "halo"}
     assert route.call_count == 1
     assert spend.month()["input_tokens"] == 400
+
+
+@respx.mock
+async def test_workspace_id_is_sent_when_set_and_its_absence_is_explained() -> None:
+    # Arrange
+    import pytest
+
+    from app.library.subtitles import SubtitleError
+
+    unscoped = {
+        "error": {
+            "message": "This API key is not scoped to a workspace, so this request must "
+            "include the anthropic-workspace-id header."
+        }
+    }
+    ok = {"content": [{"type": "text", "text": '{"1": "halo"}'}]}
+    route = respx.post("https://claude.test/v1/messages").mock(
+        side_effect=[httpx.Response(400, json=unscoped), httpx.Response(200, json=ok)]
+    )
+    async with httpx.AsyncClient() as client:
+        plain = ClaudeTranslator(client, "sk", "claude-haiku-5-5", "https://claude.test")
+        scoped = ClaudeTranslator(
+            client, "sk", "claude-haiku-5-5", "https://claude.test", workspace_id="wrkspc_1"
+        )
+
+        # Act
+        with pytest.raises(SubtitleError, match="ANTHROPIC_WORKSPACE_ID"):
+            await plain.translate(["hi"], "id")
+        lines = await scoped.translate(["hi"], "id")
+
+    # Assert
+    assert lines == {0: "halo"}
+    assert "anthropic-workspace-id" not in route.calls[0].request.headers
+    assert route.calls[1].request.headers["anthropic-workspace-id"] == "wrkspc_1"

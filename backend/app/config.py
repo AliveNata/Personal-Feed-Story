@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     groq_translate_model: str = "llama-3.3-70b-versatile"
     anthropic_api_key: SecretStr = SecretStr("")
     anthropic_base_url: str = "https://api.anthropic.com"
+    # For a key not tied to one workspace, Anthropic asks which workspace to bill (wrkspc_...).
+    anthropic_workspace_id: str = ""
     claude_translate_model: str = "claude-haiku-5-5"
     # USD per million tokens for the spend estimate, Haiku 5.5 for prompts under 100K tokens.
     claude_input_usd_per_mtok: float = Field(default=0.10, ge=0)
