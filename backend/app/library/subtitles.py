@@ -13,7 +13,7 @@ import math
 import re
 import shutil
 import tempfile
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -230,23 +230,71 @@ class Transcriber(Protocol):
     async def transcribe(self, audio: Path) -> tuple[str | None, list[Line]]: ...
 
 
+# Tried in order when Groq answers 404 for a model: retired, or blocked for the account.
+TRANSCRIBE_FALLBACKS = ("whisper-large-v3-turbo",)
+TRANSLATE_FALLBACKS = ("openai/gpt-oss-120b", "llama-3.1-8b-instant")
+
+
+def _groq_message(response: httpx.Response) -> str:
+    try:
+        message = response.json().get("error", {}).get("message", "")
+    except ValueError:
+        message = response.text
+    return str(message)[:160]
+
+
+async def _call_groq(
+    send: Callable[[str], Awaitable[httpx.Response]],
+    models: list[str],
+    step: str,
+) -> httpx.Response:
+    """Send with each model in turn until one exists, retrying rate limits along the way."""
+    last_error = ""
+    for model in dict.fromkeys(models):
+        for attempt in range(GROQ_RETRIES):
+            response = await send(model)
+            if response.status_code == 429 and attempt < GROQ_RETRIES - 1:
+                wait = _retry_after(response, default=20 * (attempt + 1))
+                logger.info("groq rate limited, waiting %.0fs", wait)
+                await asyncio.sleep(wait)
+                continue
+            break
+        if response.status_code == 404:
+            last_error = _groq_message(response)
+            logger.warning("groq %s: model %s not available: %s", step, model, last_error)
+            continue
+        if response.status_code in (401, 403):
+            raise SubtitleError("GROQ_API_KEY ditolak Groq, cek lagi key-nya")
+        if response.status_code == 429:
+            raise SubtitleError("Kuota Groq lagi habis, coba lagi nanti")
+        if response.status_code >= 400:
+            message = _groq_message(response)
+            logger.warning("groq %s error %s: %s", step, response.status_code, message)
+            raise SubtitleError(f"Groq {step} error {response.status_code}: {message}")
+        if model != models[0]:
+            logger.info("groq %s used fallback model %s", step, model)
+        return response
+    raise SubtitleError(f"Model Groq buat {step} nggak tersedia: {last_error}")
+
+
 class GroqTranscriber:
     def __init__(self, client: httpx.AsyncClient, api_key: str, model: str, base_url: str) -> None:
         self._client = client
         self._api_key = api_key
-        self._model = model
+        self._models = [model, *TRANSCRIBE_FALLBACKS]
         self._url = f"{base_url.rstrip('/')}/audio/transcriptions"
 
     async def transcribe(self, audio: Path) -> tuple[str | None, list[Line]]:
         if not self._api_key:
             raise SubtitleError("GROQ_API_KEY belum diisi di backend/.env")
-        for attempt in range(GROQ_RETRIES):
+
+        async def send(model: str) -> httpx.Response:
             with audio.open("rb") as handle:
-                response = await self._client.post(
+                return await self._client.post(
                     self._url,
                     headers={"Authorization": f"Bearer {self._api_key}"},
                     data={
-                        "model": self._model,
+                        "model": model,
                         "response_format": "verbose_json",
                         "timestamp_granularities[]": "segment",
                         "temperature": "0",
@@ -254,21 +302,9 @@ class GroqTranscriber:
                     files={"file": (audio.name, handle, "audio/ogg")},
                     timeout=300,
                 )
-            if response.status_code == 429 and attempt < GROQ_RETRIES - 1:
-                wait = _retry_after(response, default=20 * (attempt + 1))
-                logger.info("groq rate limited, waiting %.0fs", wait)
-                await asyncio.sleep(wait)
-                continue
-            if response.status_code in (401, 403):
-                raise SubtitleError("GROQ_API_KEY ditolak Groq, cek lagi key-nya")
-            if response.status_code == 429:
-                raise SubtitleError("Kuota Groq lagi habis, coba lagi nanti")
-            if response.status_code >= 400:
-                logger.warning("groq error %s: %s", response.status_code, response.text[:500])
-                raise SubtitleError(f"Groq error {response.status_code}")
-            body = response.json()
-            return normalize_language(body.get("language")), _speech_lines(body.get("segments"))
-        raise SubtitleError("Kuota Groq lagi habis, coba lagi nanti")
+
+        body = (await _call_groq(send, self._models, "transkrip")).json()
+        return normalize_language(body.get("language")), _speech_lines(body.get("segments"))
 
 
 def _retry_after(response: httpx.Response, default: float) -> float:
@@ -355,39 +391,29 @@ class GroqTranslator:
     def __init__(self, client: httpx.AsyncClient, api_key: str, model: str, base_url: str) -> None:
         self._client = client
         self._api_key = api_key
-        self._model = model
+        self._models = [model, *TRANSLATE_FALLBACKS]
         self._url = f"{base_url.rstrip('/')}/chat/completions"
 
     async def translate(self, texts: list[str], target: TranslationTarget) -> list[str]:
         if not self._api_key:
             raise SubtitleError("GROQ_API_KEY belum diisi di backend/.env")
-        for attempt in range(GROQ_RETRIES):
-            response = await self._client.post(
+
+        async def send(model: str) -> httpx.Response:
+            return await self._client.post(
                 self._url,
                 headers={"Authorization": f"Bearer {self._api_key}"},
                 json={
-                    "model": self._model,
+                    "model": model,
                     "temperature": 0.2,
                     "messages": [{"role": "user", "content": translation_prompt(texts, target)}],
                 },
                 timeout=180,
             )
-            if response.status_code == 429 and attempt < GROQ_RETRIES - 1:
-                wait = _retry_after(response, default=20 * (attempt + 1))
-                logger.info("groq rate limited, waiting %.0fs", wait)
-                await asyncio.sleep(wait)
-                continue
-            if response.status_code in (401, 403):
-                raise SubtitleError("GROQ_API_KEY ditolak Groq, cek lagi key-nya")
-            if response.status_code == 429:
-                raise SubtitleError("Kuota Groq lagi habis, coba lagi nanti")
-            if response.status_code >= 400:
-                logger.warning("groq error %s: %s", response.status_code, response.text[:500])
-                raise SubtitleError(f"Groq error {response.status_code}")
-            choices = response.json().get("choices") or [{}]
-            content = choices[0].get("message", {}).get("content") or ""
-            return _parse_lines(content, len(texts))
-        raise SubtitleError("Kuota Groq lagi habis, coba lagi nanti")
+
+        response = await _call_groq(send, self._models, "terjemahan")
+        choices = response.json().get("choices") or [{}]
+        content = choices[0].get("message", {}).get("content") or ""
+        return _parse_lines(content, len(texts))
 
 
 class ClaudeTranslator:

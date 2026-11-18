@@ -185,6 +185,42 @@ async def test_groq_drops_non_speech_and_retries_after_rate_limit(tmp_path: Path
 
 
 @respx.mock
+async def test_retired_groq_model_falls_back_and_names_the_step_when_none_work(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    audio = tmp_path / "a.ogg"
+    audio.write_bytes(b"x")
+    gone = httpx.Response(404, json={"error": {"message": "model does not exist"}})
+    ok = httpx.Response(200, json={"language": "id", "segments": []})
+    route = respx.post(GROQ_URL).mock(side_effect=[gone, ok])
+    chat = respx.post(GROQ_CHAT_URL).mock(return_value=gone)
+    async with httpx.AsyncClient() as client:
+        groq = GroqTranscriber(client, "gsk", "whisper-old", "https://groq.test/openai/v1")
+        translator = GroqTranslator(client, "gsk", "llama-old", "https://groq.test/openai/v1")
+
+        # Act
+        language, _ = await groq.transcribe(audio)
+        with pytest.raises(SubtitleError) as failure:
+            await translator.translate(["hi"], "id")
+
+    # Assert
+    assert language == "id"
+    models = [json_field(call.request, "model") for call in route.calls]
+    assert models == ["whisper-old", "whisper-large-v3-turbo"]
+    assert chat.call_count == 3
+    assert "terjemahan" in str(failure.value) and "model does not exist" in str(failure.value)
+
+
+def json_field(request: httpx.Request, name: str) -> str:
+    body = request.content.decode(errors="ignore")
+    if request.headers.get("content-type", "").startswith("application/json"):
+        return str(json.loads(body)[name])
+    marker = f'name="{name}"'
+    return body.split(marker, 1)[1].split("\r\n\r\n", 1)[1].split("\r\n", 1)[0]
+
+
+@respx.mock
 async def test_groq_rejected_key_is_a_readable_error(tmp_path: Path) -> None:
     # Arrange
     audio = tmp_path / "a.ogg"
