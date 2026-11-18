@@ -7,9 +7,11 @@ import {
   SubtitleTrackName,
 } from '../types';
 import {
+  editSubtitleLine,
   fetchSubtitleInfo,
   fetchSubtitleTrack,
   generateSubtitles,
+  retranslateSubtitles,
   retranslateWithClaude,
   translateSubtitles,
 } from '../utils/api';
@@ -27,19 +29,23 @@ const LANGUAGE_NAMES: Record<string, string> = {
 export const languageName = (code: string | null): string =>
   code ? (LANGUAGE_NAMES[code] ?? code.toUpperCase()) : 'tidak dikenal';
 
+const TRACK_LABELS: Record<SubtitleTarget, string> = { en: 'English', id: 'Indonesia' };
+
 export interface SubtitleOption {
   choice: SubtitleChoice;
   label: string;
   state: SubtitleState;
   progress: number | null;
-  // A saved translation being made again with Claude.
+  // A saved translation being made again.
   isRedoing: boolean;
 }
 
-export interface ClaudeRedo {
+export interface SubtitleAction {
+  key: string;
+  label: string;
+  title: string;
   isWorking: boolean;
-  progress: number | null;
-  onRedo: () => void;
+  onSelect: () => void;
 }
 
 export interface SubtitleControls {
@@ -47,8 +53,24 @@ export interface SubtitleControls {
   choice: SubtitleChoice;
   onChoose: (choice: SubtitleChoice) => void;
   lines: SubtitleLine[] | null;
-  // Offered for a Groq translation while ANTHROPIC_API_KEY is set, null otherwise.
-  claude: ClaudeRedo | null;
+  // Edit, translate again, make it more natural with Claude: for the track on screen.
+  actions: SubtitleAction[];
+}
+
+export interface CachedTrack {
+  lines: SubtitleLine[];
+  edited: number[];
+}
+
+export interface SubtitleEditor {
+  track: SubtitleTrackName;
+  label: string;
+  // Null while loading.
+  current: CachedTrack | null;
+  // The spoken lines, shown beside a translation as reference. Null for the original track.
+  original: CachedTrack | null;
+  saveLine: (index: number, text: string) => Promise<void>;
+  close: () => void;
 }
 
 const isBusy = (state: SubtitleState | undefined): boolean =>
@@ -63,17 +85,18 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
   const [info, setInfo] = useState<SubtitleInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [choice, setChoice] = useState<SubtitleChoice>(readSubtitleChoice);
-  // Kept with who made them: a translation redone by Claude is fetched again.
-  const [tracks, setTracks] = useState<
-    Partial<Record<SubtitleTrackName, { translator: string | null; lines: SubtitleLine[] }>>
-  >({});
+  const [tracks, setTracks] = useState<Partial<Record<SubtitleTrackName, CachedTrack>>>({});
+  const [editorTrack, setEditorTrack] = useState<SubtitleTrackName | null>(null);
   const requested = useRef(new Set<SubtitleTarget>());
+  const previousStates = useRef<Partial<Record<SubtitleTrackName, SubtitleState>>>({});
 
   useEffect(() => {
     setInfo(null);
     setTracks({});
     setError(null);
+    setEditorTrack(null);
     requested.current = new Set();
+    previousStates.current = {};
     if (!isVideo) return;
     let isCurrent = true;
     fetchSubtitleInfo(itemId)
@@ -84,20 +107,31 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
     };
   }, [itemId, isVideo]);
 
-  const progressOf = useCallback(
-    (track: SubtitleTrackName): number | null =>
-      info?.tracks.find((entry) => entry.track === track)?.progress ?? null,
-    [info],
-  );
-  const translatorOf = useCallback(
-    (track: SubtitleTrackName): string | null =>
-      info?.tracks.find((entry) => entry.track === track)?.translator ?? null,
+  // A track that just finished (made again, for instance) is fetched anew.
+  useEffect(() => {
+    if (!info) return;
+    const finished = info.tracks.filter(
+      (entry) => entry.state === 'ready' && isBusy(previousStates.current[entry.track]),
+    );
+    previousStates.current = Object.fromEntries(
+      info.tracks.map((entry) => [entry.track, entry.state]),
+    );
+    if (finished.length) {
+      setTracks((previous) => {
+        const next = { ...previous };
+        finished.forEach((entry) => delete next[entry.track]);
+        return next;
+      });
+    }
+  }, [info]);
+
+  const entryOf = useCallback(
+    (track: SubtitleTrackName) => info?.tracks.find((entry) => entry.track === track),
     [info],
   );
   const stateOf = useCallback(
-    (track: SubtitleTrackName): SubtitleState =>
-      info?.tracks.find((entry) => entry.track === track)?.state ?? 'none',
-    [info],
+    (track: SubtitleTrackName): SubtitleState => entryOf(track)?.state ?? 'none',
+    [entryOf],
   );
   const anyBusy = info?.tracks.some((entry) => isBusy(entry.state)) ?? false;
 
@@ -142,39 +176,45 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
     }
   }, [shownTrack, stateOf, requestTranslation]);
 
-  const shownState = shownTrack ? stateOf(shownTrack) : 'none';
-  const shownTranslator = shownTrack ? translatorOf(shownTrack) : null;
-  const cached = shownTrack ? tracks[shownTrack] : undefined;
-  const needsFetch =
-    shownTrack !== null &&
-    shownState === 'ready' &&
-    (cached === undefined || cached.translator !== shownTranslator);
+  // Tracks to have in hand: the one on screen, and while editing a translation its original.
+  const wanted = new Set<SubtitleTrackName>();
+  if (shownTrack) wanted.add(shownTrack);
+  if (editorTrack) wanted.add(editorTrack).add('original');
+  // A file is on the server once ready, and while a saved translation is being made again.
+  const hasFile = (name: SubtitleTrackName): boolean =>
+    stateOf(name) === 'ready' || (isBusy(stateOf(name)) && Boolean(entryOf(name)?.translator));
+  const toFetchKey = [...wanted]
+    .filter((name) => tracks[name] === undefined && hasFile(name))
+    .join(',');
+
   useEffect(() => {
-    if (!needsFetch || shownTrack === null) return;
+    if (!toFetchKey) return;
     let isCurrent = true;
-    fetchSubtitleTrack(itemId, shownTrack)
-      .then(
-        (track) =>
-          isCurrent &&
-          setTracks((previous) => ({
-            ...previous,
-            [shownTrack]: { translator: shownTranslator, lines: track.lines },
-          })),
-      )
-      .catch((caught: unknown) => console.error('fetchSubtitleTrack failed', caught));
+    for (const name of toFetchKey.split(',') as SubtitleTrackName[]) {
+      fetchSubtitleTrack(itemId, name)
+        .then(
+          (track) =>
+            isCurrent &&
+            setTracks((previous) => ({
+              ...previous,
+              [name]: { lines: track.lines, edited: track.edited },
+            })),
+        )
+        .catch((caught: unknown) => console.error('fetchSubtitleTrack failed', caught));
+    }
     return () => {
       isCurrent = false;
     };
-  }, [itemId, shownTrack, shownTranslator, needsFetch]);
+  }, [itemId, toFetchKey]);
 
-  const redoWithClaude = useCallback(
-    (target: SubtitleTarget) => {
+  const redo = useCallback(
+    (target: SubtitleTarget, withClaude: boolean) => {
       setError(null);
-      retranslateWithClaude(itemId, target)
+      (withClaude ? retranslateWithClaude : retranslateSubtitles)(itemId, target)
         .then(setInfo)
         .catch((caught: unknown) => {
-          console.error('retranslateWithClaude failed', caught);
-          setError(caught instanceof Error ? caught.message : 'Gagal minta Claude');
+          console.error('retranslate failed', caught);
+          setError(caught instanceof Error ? caught.message : 'Gagal minta terjemahan ulang');
         });
     },
     [itemId],
@@ -203,6 +243,17 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
     [stateOf, language, requestTranslation],
   );
 
+  const saveLine = useCallback(
+    async (track: SubtitleTrackName, index: number, text: string) => {
+      const saved = await editSubtitleLine(itemId, track, index, text);
+      setTracks((previous) => ({
+        ...previous,
+        [track]: { lines: saved.lines, edited: saved.edited },
+      }));
+    },
+    [itemId],
+  );
+
   const originalState = stateOf('original');
   const controls = useMemo((): SubtitleControls | null => {
     if (originalState !== 'ready') return null;
@@ -216,65 +267,98 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
         isRedoing: false,
       },
     ];
-    const translations: [SubtitleTarget, string][] = [
-      ['en', 'English'],
-      ['id', 'Indonesia'],
-    ];
-    for (const [target, label] of translations) {
+    for (const target of ['en', 'id'] as const) {
       if (language !== target) {
-        const state = stateOf(target);
+        const entry = entryOf(target);
         options.push({
           choice: target,
-          label,
-          state,
-          progress: progressOf(target),
-          isRedoing: isBusy(state) && translatorOf(target) !== null,
+          label: TRACK_LABELS[target],
+          state: entry?.state ?? 'none',
+          progress: entry?.progress ?? null,
+          isRedoing: isBusy(entry?.state) && (entry?.translator ?? null) !== null,
         });
       }
     }
-    const shownChoice: SubtitleChoice = choice === language ? 'original' : choice;
-    let claude: ClaudeRedo | null = null;
-    if (info?.claudeAvailable && (shownTrack === 'en' || shownTrack === 'id')) {
+
+    const actions: SubtitleAction[] = [];
+    if (shownTrack && tracks[shownTrack]) {
+      actions.push({
+        key: 'edit',
+        label: 'Edit subtitle',
+        title: 'Benerin teks subtitle baris per baris, tersimpan di server',
+        isWorking: false,
+        onSelect: () => setEditorTrack(shownTrack),
+      });
+    }
+    if (shownTrack === 'en' || shownTrack === 'id') {
       const target = shownTrack;
-      const state = stateOf(target);
-      const translator = translatorOf(target);
-      const isWorking = isBusy(state) && translator !== null;
-      if (isWorking || (state === 'ready' && translator !== 'claude')) {
-        claude = { isWorking, progress: progressOf(target), onRedo: () => redoWithClaude(target) };
+      const entry = entryOf(target);
+      const translator = entry?.translator ?? null;
+      const isRedoing = isBusy(entry?.state) && translator !== null;
+      const progress = entry?.progress ?? null;
+      const working = progress === null ? 'nunggu antrean…' : `${progress}%`;
+      if (isRedoing) {
+        actions.push({
+          key: 'redoing',
+          label: `Lagi diterjemahin ulang ${working}`,
+          title: 'Subtitle lama tetap tampil sampai yang baru selesai',
+          isWorking: true,
+          onSelect: () => undefined,
+        });
+      } else if (entry?.state === 'ready') {
+        if (translator !== 'claude') {
+          actions.push({
+            key: 'redo',
+            label: 'Terjemahin ulang',
+            title: 'Terjemahin lagi baris yang belum diedit, editan kamu tetap',
+            isWorking: false,
+            onSelect: () => redo(target, false),
+          });
+        }
+        if (info?.claudeAvailable && translator !== 'claude') {
+          actions.push({
+            key: 'claude',
+            label: 'Bikin lebih santai (Claude)',
+            title: 'Terjemahin ulang pakai Claude biar lebih natural, editan kamu tetap',
+            isWorking: false,
+            onSelect: () => redo(target, true),
+          });
+        }
       }
     }
+
     return {
       options,
-      choice: shownChoice,
+      choice: choice === language ? 'original' : choice,
       onChoose: choose,
       lines: shownTrack ? (tracks[shownTrack]?.lines ?? null) : null,
-      claude,
+      actions,
     };
-  }, [
-    originalState,
-    language,
-    stateOf,
-    progressOf,
-    translatorOf,
-    choice,
-    choose,
-    shownTrack,
-    tracks,
-    info,
-    redoWithClaude,
-  ]);
+  }, [originalState, language, entryOf, choice, choose, shownTrack, tracks, info, redo]);
 
-  const originalError = info?.tracks.find((entry) => entry.track === 'original')?.error ?? null;
-  const shownError = shownTrack
-    ? (info?.tracks.find((entry) => entry.track === shownTrack)?.error ?? null)
-    : null;
+  const editor = useMemo((): SubtitleEditor | null => {
+    if (!editorTrack) return null;
+    return {
+      track: editorTrack,
+      label:
+        editorTrack === 'original' ? `Asli (${languageName(language)})` : TRACK_LABELS[editorTrack],
+      current: tracks[editorTrack] ?? null,
+      original: editorTrack === 'original' ? null : (tracks.original ?? null),
+      saveLine: (index, text) => saveLine(editorTrack, index, text),
+      close: () => setEditorTrack(null),
+    };
+  }, [editorTrack, language, tracks, saveLine]);
+
+  const originalError = entryOf('original')?.error ?? null;
+  const shownError = shownTrack ? (entryOf(shownTrack)?.error ?? null) : null;
 
   return {
     // Null for photos and until the first answer arrives.
     originalState: isVideo && info ? originalState : null,
-    originalProgress: progressOf('original'),
+    originalProgress: entryOf('original')?.progress ?? null,
     error: error ?? originalError ?? shownError,
     generate,
     controls,
+    editor,
   };
 };

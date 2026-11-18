@@ -633,6 +633,16 @@ async def test_subtitles_generate_once_then_translate_and_serve_lines(
     assert missing.status_code == 404
     assert on_photo.status_code == 400
 
+    # Act: fix a misheard line by hand
+    edited = await client.put(f"{base}/original/lines/0", json={"text": "  halo semuanya "})
+    blank = await client.put(f"{base}/original/lines/0", json={"text": "   "})
+    out_of_range = await client.put(f"{base}/original/lines/7", json={"text": "x"})
+
+    # Assert
+    assert edited.json()["lines"][0]["text"] == "halo semuanya"
+    assert edited.json()["edited"] == [0]
+    assert (blank.status_code, out_of_range.status_code) == (422, 404)
+
 
 async def test_translation_can_be_redone_with_claude_only_when_its_key_is_set(
     client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession], tmp_path: Path

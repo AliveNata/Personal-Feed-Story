@@ -180,6 +180,11 @@ In the viewer, a video gets a subtitle button in the top toolbar. It sends the a
 (Whisper Large v3), which writes timed lines in the spoken language. Once that is done, the CC
 button in the video controls switches between off, the original language, English and Indonesia.
 A translation is made the first time it is picked, by a text model on Groq (same key, free tier).
+Lines the translator skips or refuses are asked for again in smaller groups, and the ones still
+refused stay in the spoken language. "Edit subtitle" in the CC menu lists every line (with a filter
+for lines still untranslated) and saves each fix to the server, for the original track too.
+"Terjemahin ulang" translates again and keeps the lines edited by hand.
+
 With `ANTHROPIC_API_KEY` set, the CC menu also offers "Bikin lebih santai (Claude)" for the
 language on screen: Claude translates that video again from the original, and its version replaces
 the Groq one. Set `SUBTITLE_TRANSLATOR=anthropic` to translate everything with Claude from the start. The subtitle button shows
@@ -258,7 +263,9 @@ Login required:
 | `POST /api/items/{id}/subtitles` | Queues the transcription (once per file) |
 | `POST /api/items/{id}/subtitles/{en\|id}` | Queues a translation of the original track |
 | `POST /api/items/{id}/subtitles/{en\|id}/claude` | Translates again with Claude, replacing the saved translation |
+| `POST /api/items/{id}/subtitles/{en\|id}/redo` | Translates again, keeping lines edited by hand |
 | `GET /api/items/{id}/subtitles/{track}` | Timed lines of a finished track |
+| `PUT /api/items/{id}/subtitles/{track}/lines/{index}` | `{text}` saves a line edited by hand |
 
 Errors come back as `{"detail": "..."}`:
 

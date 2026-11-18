@@ -2,6 +2,7 @@ from typing import Annotated, Literal
 
 from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_db, require_user
@@ -11,9 +12,11 @@ from app.library.routes import get_queue, get_storage
 from app.library.storage import LibraryStorage
 from app.library.subtitles import (
     TRANSLATION_TARGETS,
+    SubtitleError,
     SubtitleFiles,
     SubtitleStatus,
     Track,
+    Transcript,
     TranslationTarget,
 )
 from app.models import CamelModel
@@ -68,6 +71,29 @@ class SubtitleTrack(CamelModel):
     track: Track
     language: str | None
     lines: list[SubtitleLine]
+    # Positions of lines changed by hand.
+    edited: list[int]
+
+
+class LineEdit(CamelModel):
+    text: str = Field(min_length=1, max_length=500)
+
+    @field_validator("text")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        clean = value.strip()
+        if not clean:
+            raise ValueError("Teks subtitle tidak boleh kosong")
+        return clean
+
+
+def _track_response(track: Track, transcript: Transcript) -> SubtitleTrack:
+    return SubtitleTrack(
+        track=track,
+        language=transcript.language,
+        lines=[SubtitleLine(start=x.start, end=x.end, text=x.text) for x in transcript.lines],
+        edited=sorted(transcript.edited),
+    )
 
 
 async def _video(db: AsyncSession, item_id: int) -> MediaItem:
@@ -175,6 +201,35 @@ async def translate_subtitles(
     return _info(sha, files, status, claude)
 
 
+async def _redo(
+    item_id: int,
+    target: TranslationTarget,
+    use_claude: bool,
+    db: AsyncSession,
+    files: SubtitleFiles,
+    status: SubtitleStatus,
+    queue: ArqRedis,
+    claude: bool,
+) -> SubtitleInfo:
+    item = await _video(db, item_id)
+    sha = item.blob_sha256
+    if use_claude and not claude:
+        raise HTTPException(status_code=400, detail="ANTHROPIC_API_KEY belum diisi di backend/.env")
+    if not files.has(sha, "original"):
+        raise HTTPException(status_code=409, detail="Generate subtitle dulu")
+    if not _is_pending(status, sha, target):
+        status.set(sha, target, "queued")
+        suffix = "claude" if use_claude else "redo"
+        await queue.enqueue_job(
+            "translate_subtitles",
+            sha,
+            target,
+            use_claude,
+            _job_id=f"subtitle-{sha}-{target}-{suffix}",
+        )
+    return _info(sha, files, status, claude)
+
+
 @router.post(
     "/items/{item_id}/subtitles/{target}/claude", response_model=SubtitleInfo, status_code=202
 )
@@ -188,18 +243,23 @@ async def retranslate_with_claude(
     claude: ClaudeAvailable,
 ) -> SubtitleInfo:
     """Translate again with Claude for more natural lines, replacing the earlier translation."""
-    item = await _video(db, item_id)
-    sha = item.blob_sha256
-    if not claude:
-        raise HTTPException(status_code=400, detail="ANTHROPIC_API_KEY belum diisi di backend/.env")
-    if not files.has(sha, "original"):
-        raise HTTPException(status_code=409, detail="Generate subtitle dulu")
-    if not _is_pending(status, sha, target):
-        status.set(sha, target, "queued")
-        await queue.enqueue_job(
-            "translate_subtitles", sha, target, True, _job_id=f"subtitle-{sha}-{target}-claude"
-        )
-    return _info(sha, files, status, claude)
+    return await _redo(item_id, target, True, db, files, status, queue, claude)
+
+
+@router.post(
+    "/items/{item_id}/subtitles/{target}/redo", response_model=SubtitleInfo, status_code=202
+)
+async def retranslate(
+    item_id: int,
+    target: TranslationTarget,
+    db: DbSession,
+    files: Files,
+    status: Status,
+    queue: Queue,
+    claude: ClaudeAvailable,
+) -> SubtitleInfo:
+    """Translate again with the default translator, for a translation that came out wrong."""
+    return await _redo(item_id, target, False, db, files, status, queue, claude)
 
 
 @router.get("/items/{item_id}/subtitles/{track}", response_model=SubtitleTrack)
@@ -210,8 +270,16 @@ async def get_subtitle_track(
     transcript = files.load(item.blob_sha256, track)
     if transcript is None:
         raise HTTPException(status_code=404, detail="Subtitle ini belum ada")
-    return SubtitleTrack(
-        track=track,
-        language=transcript.language,
-        lines=[SubtitleLine(start=x.start, end=x.end, text=x.text) for x in transcript.lines],
-    )
+    return _track_response(track, transcript)
+
+
+@router.put("/items/{item_id}/subtitles/{track}/lines/{index}", response_model=SubtitleTrack)
+async def edit_subtitle_line(
+    item_id: int, track: Track, index: int, body: LineEdit, db: DbSession, files: Files
+) -> SubtitleTrack:
+    item = await _video(db, item_id)
+    try:
+        transcript = files.edit_line(item.blob_sha256, track, index, body.text)
+    except SubtitleError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _track_response(track, transcript)

@@ -54,17 +54,25 @@ class FakeTranscriber:
 
 
 class FakeTranslator:
+    """Refuses any batch holding a refused line, and drops the last line of big batches."""
+
     name = "fake"
 
-    def __init__(self, broken_batches: set[int] | None = None) -> None:
+    def __init__(self, refused: set[str] | None = None, drops_over: int | None = None) -> None:
         self.batches = 0
-        self.broken = broken_batches or set()
+        self.sizes: list[int] = []
+        self.refused = refused or set()
+        self.drops_over = drops_over
 
-    async def translate(self, texts: list[str], target: TranslationTarget) -> list[str]:
+    async def translate(self, texts: list[str], target: TranslationTarget) -> dict[int, str]:
         self.batches += 1
-        if self.batches in self.broken:
+        self.sizes.append(len(texts))
+        if self.refused & set(texts):
             raise BatchMismatch("refused")
-        return [f"[{target}] {text}" for text in texts]
+        lines = {index: f"[{target}] {text}" for index, text in enumerate(texts)}
+        if self.drops_over is not None and len(texts) > self.drops_over:
+            lines.pop(len(texts) - 1)
+        return lines
 
 
 @pytest.fixture(autouse=True)
@@ -237,7 +245,9 @@ async def test_groq_rejected_key_is_a_readable_error(tmp_path: Path) -> None:
 @respx.mock
 async def test_claude_reply_is_read_even_with_text_around_the_array() -> None:
     # Arrange
-    reply = {"content": [{"type": "text", "text": 'Here you go:\n["Halo", "Apa kabar?"]'}]}
+    reply = {
+        "content": [{"type": "text", "text": 'Here you go:\n{"1": "Halo", "2": "Apa kabar?"}'}]
+    }
     route = respx.post(CLAUDE_URL).mock(return_value=httpx.Response(200, json=reply))
     async with httpx.AsyncClient() as client:
         claude = ClaudeTranslator(client, "sk-ant-test", "claude-haiku-5-5", "https://claude.test")
@@ -246,29 +256,37 @@ async def test_claude_reply_is_read_even_with_text_around_the_array() -> None:
         lines = await claude.translate(["Hello", "How are you?"], "id")
 
     # Assert
-    assert lines == ["Halo", "Apa kabar?"]
+    assert lines == {0: "Halo", 1: "Apa kabar?"}
     sent = json.loads(route.calls[0].request.content)
+    assert '"2": "How are you?"' in sent["messages"][0]["content"]
     assert sent["model"] == "claude-haiku-5-5"
     assert route.calls[0].request.headers["x-api-key"] == "sk-ant-test"
 
 
 @respx.mock
-async def test_claude_reply_with_wrong_line_count_is_a_batch_mismatch() -> None:
+async def test_reply_without_json_is_a_batch_mismatch_and_short_reply_is_partial() -> None:
     # Arrange
-    reply = {"content": [{"type": "text", "text": '["only one"]'}]}
-    respx.post(CLAUDE_URL).mock(return_value=httpx.Response(200, json=reply))
+    refusal = {"content": [{"type": "text", "text": "I can't help with that."}]}
+    short = {"content": [{"type": "text", "text": '{"2": "dua", "9": "out of range"}'}]}
+    respx.post(CLAUDE_URL).mock(
+        side_effect=[httpx.Response(200, json=refusal), httpx.Response(200, json=short)]
+    )
     async with httpx.AsyncClient() as client:
         claude = ClaudeTranslator(client, "sk-ant-test", "claude-haiku-5-5", "https://claude.test")
 
-        # Act / Assert
+        # Act
         with pytest.raises(BatchMismatch):
             await claude.translate(["a", "b"], "en")
+        partial = await claude.translate(["a", "b"], "en")
+
+    # Assert
+    assert partial == {1: "dua"}
 
 
 @respx.mock
 async def test_groq_translator_reads_the_chat_reply_and_retries_after_rate_limit() -> None:
     # Arrange
-    reply = {"choices": [{"message": {"content": '```json\n["Halo", "Sampai jumpa"]\n```'}}]}
+    reply = {"choices": [{"message": {"content": '{"1": "Halo", "2": "Sampai jumpa"}'}}]}
     route = respx.post(GROQ_CHAT_URL).mock(
         side_effect=[httpx.Response(429), httpx.Response(200, json=reply)]
     )
@@ -281,9 +299,10 @@ async def test_groq_translator_reads_the_chat_reply_and_retries_after_rate_limit
         lines = await groq.translate(["Hello", "See you"], "id")
 
     # Assert
-    assert lines == ["Halo", "Sampai jumpa"]
+    assert lines == {0: "Halo", 1: "Sampai jumpa"}
     assert route.call_count == 2
     sent = json.loads(route.calls[1].request.content)
+    assert sent["response_format"] == {"type": "json_object"}
     assert sent["model"] == "llama-3.3-70b-versatile"
     assert route.calls[1].request.headers["authorization"] == "Bearer gsk_test"
 
@@ -306,20 +325,33 @@ def test_translator_follows_the_setting() -> None:
     assert Settings(_env_file=None).subtitle_translator == "groq"
 
 
-async def test_refused_batch_keeps_original_lines_and_others_are_translated() -> None:
+async def test_refused_batch_is_split_until_only_the_refused_line_stays_original() -> None:
     # Arrange
     count = subtitles.TRANSLATE_BATCH + 5
     original = Transcript("en", [Line(i, i + 1, f"line {i}") for i in range(count)])
-    translator = FakeTranslator(broken_batches={2})
+    translator = FakeTranslator(refused={"line 3"})
 
     # Act
     result = await subtitles.translate_transcript(original, "id", translator)
 
     # Assert
-    assert result.language == "id"
-    assert result.lines[0].text == "[id] line 0"
-    assert result.lines[-1].text == f"line {count - 1}"
+    texts = [line.text for line in result.lines]
+    assert texts[3] == "line 3"
+    assert [t for t in texts if not t.startswith("[id]")] == ["line 3"]
     assert [line.start for line in result.lines] == [line.start for line in original.lines]
+
+
+async def test_lines_a_reply_skipped_are_asked_for_again() -> None:
+    # Arrange
+    original = Transcript("en", [Line(i, i + 1, f"line {i}") for i in range(10)])
+    translator = FakeTranslator(drops_over=5)
+
+    # Act
+    result = await subtitles.translate_transcript(original, "id", translator)
+
+    # Assert
+    assert all(line.text.startswith("[id]") for line in result.lines)
+    assert translator.sizes == [10, 1]
 
 
 async def test_same_language_target_is_not_sent_for_translation() -> None:
@@ -386,3 +418,35 @@ async def test_translation_job_needs_the_original_first(tmp_path: Path) -> None:
     translated = files.load("abc", "en")
     assert translated is not None and translated.lines[0].text == "[en] halo"
     assert translated.translator == "fake"
+
+
+async def test_redo_keeps_lines_edited_by_hand(tmp_path: Path) -> None:
+    # Arrange
+    files = SubtitleFiles(tmp_path / "library")
+    status = SubtitleStatus(fakeredis.FakeRedis())
+    files.save("abc", "original", Transcript("en", [Line(0, 1, "hello"), Line(1, 2, "bye")]))
+    files.save("abc", "id", Transcript("id", [Line(0, 1, "hello"), Line(1, 2, "dadah")], "groq"))
+    files.edit_line("abc", "id", 0, "halo bos")
+    translator = FakeTranslator()
+
+    # Act
+    await subtitles.run_translation("abc", "id", files, status, translator)
+
+    # Assert
+    redone = files.load("abc", "id")
+    assert redone is not None
+    assert [line.text for line in redone.lines] == ["halo bos", "[id] bye"]
+    assert redone.edited == frozenset({0})
+    assert translator.sizes == [1]
+
+
+def test_editing_a_missing_line_is_an_error(tmp_path: Path) -> None:
+    # Arrange
+    files = SubtitleFiles(tmp_path / "library")
+    files.save("abc", "original", Transcript("en", [Line(0, 1, "hello")]))
+
+    # Act / Assert
+    with pytest.raises(SubtitleError):
+        files.edit_line("abc", "original", 5, "x")
+    with pytest.raises(SubtitleError):
+        files.edit_line("abc", "en", 0, "x")

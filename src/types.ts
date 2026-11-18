@@ -236,4 +236,6 @@ export interface SubtitleTrack {
   track: SubtitleTrackName;
   language: string | null;
   lines: SubtitleLine[];
+  // Positions of lines changed by hand.
+  edited: number[];
 }

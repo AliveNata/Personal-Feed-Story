@@ -357,6 +357,23 @@ export const retranslateWithClaude = (
 ): Promise<SubtitleInfo> =>
   request<SubtitleInfo>(`/api/items/${itemId}/subtitles/${target}/claude`, { method: 'POST' });
 
+export const retranslateSubtitles = (
+  itemId: number,
+  target: SubtitleTarget,
+): Promise<SubtitleInfo> =>
+  request<SubtitleInfo>(`/api/items/${itemId}/subtitles/${target}/redo`, { method: 'POST' });
+
+export const editSubtitleLine = (
+  itemId: number,
+  track: SubtitleTrackName,
+  index: number,
+  text: string,
+): Promise<SubtitleTrack> =>
+  request<SubtitleTrack>(`/api/items/${itemId}/subtitles/${track}/lines/${index}`, {
+    method: 'PUT',
+    json: { text },
+  });
+
 export const fetchSubtitleTrack = (
   itemId: number,
   track: SubtitleTrackName,

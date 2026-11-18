@@ -14,7 +14,7 @@ import re
 import shutil
 import tempfile
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -34,7 +34,7 @@ TRANSLATION_TARGETS: tuple[TranslationTarget, ...] = ("en", "id")
 # Whisper writes text for music and silence too. Lines it rates as likely non speech are dropped.
 NO_SPEECH_THRESHOLD = 0.6
 # Lines per Claude request: enough context for natural phrasing, small enough to retry cheaply.
-TRANSLATE_BATCH = 60
+TRANSLATE_BATCH = 40
 # Mono speech at this bitrate keeps an hour of audio near 11 MB, under Groq's 25 MB upload cap.
 AUDIO_BITRATE = "24k"
 GROQ_RETRIES = 4
@@ -70,6 +70,8 @@ class Transcript:
     lines: list[Line]
     # Who translated it: "groq" or "claude". None for the original and for older files.
     translator: str | None = None
+    # Lines changed by hand. A translation made again keeps them as they are.
+    edited: frozenset[int] = frozenset()
 
 
 def normalize_language(raw: str | None) -> str | None:
@@ -97,6 +99,7 @@ class SubtitleFiles:
         payload = {
             "language": transcript.language,
             "translator": transcript.translator,
+            "edited": sorted(transcript.edited),
             "lines": [asdict(x) for x in transcript.lines],
         }
         # Written beside and renamed, so a reader never sees half a file.
@@ -110,7 +113,22 @@ class SubtitleFiles:
             return None
         raw = json.loads(path.read_text(encoding="utf-8"))
         lines = [Line(**line) for line in raw["lines"]]
-        return Transcript(raw.get("language"), lines, raw.get("translator"))
+        return Transcript(
+            raw.get("language"), lines, raw.get("translator"), frozenset(raw.get("edited", []))
+        )
+
+    def edit_line(self, sha256: str, track: Track, index: int, text: str) -> Transcript:
+        transcript = self.load(sha256, track)
+        if transcript is None:
+            raise SubtitleError("Subtitle ini belum ada")
+        if not 0 <= index < len(transcript.lines):
+            raise SubtitleError("Baris subtitle nggak ada")
+        lines = list(transcript.lines)
+        old = lines[index]
+        lines[index] = Line(old.start, old.end, text)
+        updated = replace(transcript, lines=lines, edited=transcript.edited | {index})
+        self.save(sha256, track, updated)
+        return updated
 
     def delete_all(self, sha256: str) -> None:
         shutil.rmtree(self.root / sha256, ignore_errors=True)
@@ -371,15 +389,20 @@ async def transcribe_video(
 class Translator(Protocol):
     name: str
 
-    async def translate(self, texts: list[str], target: TranslationTarget) -> list[str]: ...
+    async def translate(self, texts: list[str], target: TranslationTarget) -> dict[int, str]:
+        """Translated lines by their position in texts. Lines it could not do are left out."""
+        ...
 
 
 def translation_prompt(texts: list[str], target: TranslationTarget) -> str:
+    # Numbered lines instead of a plain list: a reply that merges or skips a line still lines up,
+    # and only the missing numbers are asked for again.
+    numbered = {str(index + 1): text for index, text in enumerate(texts)}
     return (
-        f"Translate these video subtitle lines into {TARGET_NAMES[target]}. "
-        "Keep each line short like a subtitle and keep names as they are. "
-        "Reply with only a JSON array of strings, one per input line, same order and the "
-        f"same count ({len(texts)}).\n\n" + json.dumps(texts, ensure_ascii=False)
+        f"Translate these numbered video subtitle lines into {TARGET_NAMES[target]}. "
+        "Translate every line, keep each one short like a subtitle and keep names as they are. "
+        "Reply with only a JSON object with the same numbers as keys and the translated lines "
+        "as values.\n\n" + json.dumps(numbered, ensure_ascii=False)
     )
 
 
@@ -394,7 +417,7 @@ class GroqTranslator:
         self._models = [model, *TRANSLATE_FALLBACKS]
         self._url = f"{base_url.rstrip('/')}/chat/completions"
 
-    async def translate(self, texts: list[str], target: TranslationTarget) -> list[str]:
+    async def translate(self, texts: list[str], target: TranslationTarget) -> dict[int, str]:
         if not self._api_key:
             raise SubtitleError("GROQ_API_KEY belum diisi di backend/.env")
 
@@ -405,6 +428,7 @@ class GroqTranslator:
                 json={
                     "model": model,
                     "temperature": 0.2,
+                    "response_format": {"type": "json_object"},
                     "messages": [{"role": "user", "content": translation_prompt(texts, target)}],
                 },
                 timeout=180,
@@ -413,7 +437,7 @@ class GroqTranslator:
         response = await _call_groq(send, self._models, "terjemahan")
         choices = response.json().get("choices") or [{}]
         content = choices[0].get("message", {}).get("content") or ""
-        return _parse_lines(content, len(texts))
+        return _parse_numbered(content, len(texts))
 
 
 class ClaudeTranslator:
@@ -425,7 +449,7 @@ class ClaudeTranslator:
         self._model = model
         self._url = f"{base_url.rstrip('/')}/v1/messages"
 
-    async def translate(self, texts: list[str], target: TranslationTarget) -> list[str]:
+    async def translate(self, texts: list[str], target: TranslationTarget) -> dict[int, str]:
         if not self._api_key:
             raise SubtitleError("ANTHROPIC_API_KEY belum diisi di backend/.env")
         prompt = translation_prompt(texts, target)
@@ -454,7 +478,7 @@ class ClaudeTranslator:
             for block in body.get("content", [])
             if block.get("type") == "text"
         )
-        return _parse_lines(text, len(texts))
+        return _parse_numbered(text, len(texts))
 
 
 def build_translator(settings: "Settings", client: httpx.AsyncClient) -> Translator:
@@ -477,17 +501,50 @@ class BatchMismatch(Exception):
     pass
 
 
-def _parse_lines(text: str, expected: int) -> list[str]:
-    match = re.search(r"\[.*\]", text, re.DOTALL)
+def _parse_numbered(text: str, count: int) -> dict[int, str]:
+    match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
-        raise BatchMismatch("no JSON array in reply")
+        raise BatchMismatch(f"no JSON object in reply: {text[:120]!r}")
     try:
         parsed = json.loads(match.group(0))
     except json.JSONDecodeError as exc:
         raise BatchMismatch(f"bad JSON: {exc}") from exc
-    if not isinstance(parsed, list) or len(parsed) != expected:
-        raise BatchMismatch(f"expected {expected} lines, got {len(parsed)}")
-    return [str(item).strip() for item in parsed]
+    if not isinstance(parsed, dict):
+        raise BatchMismatch("reply is not an object")
+    lines: dict[int, str] = {}
+    for key, value in parsed.items():
+        if str(key).isdigit() and 1 <= int(key) <= count and str(value).strip():
+            lines[int(key) - 1] = str(value).strip()
+    return lines
+
+
+# A batch that comes back short is asked again in halves, down to single lines for a batch
+# of TRANSLATE_BATCH. A refused line then costs about two requests per halving.
+MAX_SPLITS = 6
+
+
+async def _translate_lines(
+    texts: list[str],
+    indices: list[int],
+    target: TranslationTarget,
+    translator: Translator,
+    results: dict[int, str],
+    depth: int = 0,
+) -> None:
+    try:
+        got = await translator.translate([texts[i] for i in indices], target)
+    except BatchMismatch as exc:
+        logger.warning("translation of %d lines failed: %s", len(indices), exc)
+        got = {}
+    for position, text in got.items():
+        results[indices[position]] = text
+    missing = [index for position, index in enumerate(indices) if position not in got]
+    if not missing or len(indices) == 1 or depth >= MAX_SPLITS:
+        return
+    half = max(len(missing) // 2, 1)
+    for part in (missing[:half], missing[half:]):
+        if part:
+            await _translate_lines(texts, part, target, translator, results, depth + 1)
 
 
 async def translate_transcript(
@@ -495,26 +552,30 @@ async def translate_transcript(
     target: TranslationTarget,
     translator: Translator,
     on_progress: ProgressCallback = _ignore_progress,
+    keep: dict[int, str] | None = None,
 ) -> Transcript:
+    """Translate every line except those in keep (edited by hand), which stay as given."""
+    keep = keep or {}
     if transcript.language == target:
         return Transcript(target, transcript.lines)
     texts = [line.text for line in transcript.lines]
-    translated: list[str] = []
-    for start in range(0, len(texts), TRANSLATE_BATCH):
-        batch = texts[start : start + TRANSLATE_BATCH]
-        try:
-            translated.extend(await translator.translate(batch, target))
-        except BatchMismatch as exc:
-            # A refused or malformed batch keeps its original lines: a gap is worse than a
-            # line in the spoken language.
-            logger.warning("translation batch at line %d kept original: %s", start, exc)
-            translated.extend(batch)
-        on_progress(min(int(len(translated) / len(texts) * 100), 99))
+    results: dict[int, str] = dict(keep)
+    todo = [index for index in range(len(texts)) if index not in keep]
+    for start in range(0, len(todo), TRANSLATE_BATCH):
+        batch = todo[start : start + TRANSLATE_BATCH]
+        await _translate_lines(texts, batch, target, translator, results)
+        on_progress(min(int((start + len(batch)) / max(len(todo), 1) * 100), 99))
+    missing = len(texts) - len(results)
+    if missing:
+        # Refused or dropped even line by line: those keep the spoken language, a gap is worse.
+        logger.warning(
+            "translation to %s kept %d of %d lines original", target, missing, len(texts)
+        )
     lines = [
-        Line(line.start, line.end, text or line.text)
-        for line, text in zip(transcript.lines, translated, strict=True)
+        Line(line.start, line.end, results.get(index, line.text))
+        for index, line in enumerate(transcript.lines)
     ]
-    return Transcript(target, lines, translator.name)
+    return Transcript(target, lines, translator.name, frozenset(keep))
 
 
 # Jobs
@@ -549,6 +610,13 @@ async def run_transcription(
     )
 
 
+def _edited_lines(files: SubtitleFiles, sha256: str, track: Track) -> dict[int, str]:
+    saved = files.load(sha256, track)
+    if saved is None:
+        return {}
+    return {i: saved.lines[i].text for i in saved.edited if i < len(saved.lines)}
+
+
 async def run_translation(
     sha256: str,
     target: TranslationTarget,
@@ -565,8 +633,18 @@ async def run_translation(
         original = files.load(sha256, "original")
         if original is None:
             raise SubtitleError("Subtitle asli belum ada, generate dulu")
-        # A translation made again (with Claude) replaces the old file only once it is done.
-        translated = await translate_transcript(original, target, translator, report)
+        # A translation made again replaces the old file only once it is done, and keeps the
+        # lines edited by hand, read again at the end so edits made meanwhile are not lost.
+        translated = await translate_transcript(
+            original, target, translator, report, keep=_edited_lines(files, sha256, target)
+        )
+        latest = _edited_lines(files, sha256, target)
+        if latest:
+            lines = [
+                Line(line.start, line.end, latest.get(index, line.text))
+                for index, line in enumerate(translated.lines)
+            ]
+            translated = replace(translated, lines=lines, edited=frozenset(latest))
         files.save(sha256, target, translated)
     except SubtitleError as exc:
         status.set(sha256, target, "failed", str(exc))

@@ -27,6 +27,7 @@ import {
 import MoveForm from './MoveForm';
 import { ConfirmDelete, focusRing, secondaryButton } from './ui';
 import { SEEK_STEP_SECONDS, SeekFlash } from './VideoSeekZones';
+import SubtitleEditor from './SubtitleEditor';
 import { useSubtitles } from './useSubtitles';
 import ZoomableMedia from './ZoomableMedia';
 import { MAX_SCALE, useZoom } from './zoom';
@@ -281,7 +282,8 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
       aria-label={`File ${position} dari ${total}`}
       className="m-0 h-full max-h-none w-full max-w-none bg-black/90 p-0 backdrop:bg-black/60"
     >
-      <div ref={stageRef} className={`flex h-full flex-col ${isFullscreen ? 'bg-black' : ''}`}>
+      <div ref={stageRef} className={`relative flex h-full flex-col ${isFullscreen ? 'bg-black' : ''}`}>
+        {subtitles.editor && <SubtitleEditor editor={subtitles.editor} videoRef={videoRef} />}
         {/* A fullscreen video keeps only its own controls, Back or Esc brings the toolbar back. */}
         <div
           className={`relative flex items-center justify-between gap-2 p-3 text-white ${
