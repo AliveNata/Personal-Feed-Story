@@ -78,6 +78,8 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const isVideo = item.mediaType === 'video';
   const subtitles = useSubtitles(item.id, isVideo);
+  const [isErrorOpen, setIsErrorOpen] = useState(false);
+  useEffect(() => setIsErrorOpen(false), [item.id, subtitles.error]);
   const isMakingSubtitles =
     subtitles.originalState === 'queued' || subtitles.originalState === 'running';
   // Null while the job still waits behind others in the worker queue.
@@ -315,11 +317,30 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
               </span>
             )}
             {subtitles.error && !isMakingSubtitles && (
-              <span role="alert" className="truncate text-xs text-red-300" title={subtitles.error}>
+              // Cut short to fit the toolbar on a phone: a tap shows the whole message below.
+              <button
+                type="button"
+                role="alert"
+                onClick={() => setIsErrorOpen((open) => !open)}
+                aria-expanded={isErrorOpen}
+                className="min-w-0 truncate rounded text-left text-xs text-red-300 underline decoration-dotted underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              >
                 {subtitles.error}
-              </span>
+              </button>
             )}
           </div>
+          {isErrorOpen && subtitles.error && (
+            <div className="absolute inset-x-3 top-full z-30 flex items-start gap-3 rounded-md bg-red-50 p-3 text-sm text-red-900 shadow-lg">
+              <p className="min-w-0 flex-1 break-words">{subtitles.error}</p>
+              <button
+                type="button"
+                onClick={() => setIsErrorOpen(false)}
+                className="shrink-0 rounded px-2 py-0.5 font-medium hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-700"
+              >
+                Tutup
+              </button>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             {isVideo && subtitles.originalState !== null && subtitles.originalState !== 'ready' && (
               <button

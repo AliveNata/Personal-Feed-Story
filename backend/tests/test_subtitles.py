@@ -450,3 +450,45 @@ def test_editing_a_missing_line_is_an_error(tmp_path: Path) -> None:
         files.edit_line("abc", "original", 5, "x")
     with pytest.raises(SubtitleError):
         files.edit_line("abc", "en", 0, "x")
+
+
+@respx.mock
+async def test_groq_broken_json_or_oversized_batch_is_retried_in_smaller_groups() -> None:
+    # Arrange
+    calls: list[int] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        prompt = body["messages"][0]["content"]
+        numbered = json.loads(prompt[prompt.index("\n\n{") + 2 :])
+        calls.append(len(numbered))
+        if len(numbered) > 2:
+            status = 400 if len(calls) == 1 else 413
+            return httpx.Response(status, json={"error": {"message": "json_validate_failed"}})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps({k: f"ok {v}" for k, v in numbered.items()})
+                        }
+                    }
+                ]
+            },
+        )
+
+    respx.post(GROQ_CHAT_URL).mock(side_effect=reply)
+    original = Transcript("en", [Line(i, i + 1, f"l{i}") for i in range(4)])
+    async with httpx.AsyncClient() as client:
+        groq = GroqTranslator(client, "gsk", "openai/gpt-oss-20b", "https://groq.test/openai/v1")
+
+        # Act
+        result = await subtitles.translate_transcript(original, "id", groq)
+
+    # Assert
+    assert [line.text for line in result.lines] == ["ok l0", "ok l1", "ok l2", "ok l3"]
+    assert calls == [4, 2, 2]
+    sent = json.loads(respx.calls[0].request.content)
+    assert sent["reasoning_effort"] == "low"
+    assert sent["max_completion_tokens"] == subtitles.MAX_TRANSLATION_TOKENS

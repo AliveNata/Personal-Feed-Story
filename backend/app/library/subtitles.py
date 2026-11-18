@@ -253,6 +253,7 @@ class Transcriber(Protocol):
 # Tried in order when Groq answers 404 for a model: retired, or blocked for the account.
 TRANSCRIBE_FALLBACKS = ("whisper-large-v3-turbo",)
 TRANSLATE_FALLBACKS = ("openai/gpt-oss-120b", "llama-3.1-8b-instant")
+MAX_TRANSLATION_TOKENS = 4096
 
 
 def _groq_message(response: httpx.Response) -> str:
@@ -269,8 +270,13 @@ async def _call_groq(
     models: list[str],
     step: str,
     record: Callable[[str, httpx.Response], None] | None = None,
+    batch_errors: tuple[int, ...] = (),
 ) -> httpx.Response:
-    """Send with each model in turn until one exists, retrying rate limits along the way."""
+    """Send with each model in turn until one exists, retrying rate limits along the way.
+
+    Statuses in batch_errors are a problem with this batch, not with the job: they raise
+    BatchMismatch, so the lines are asked for again in smaller groups.
+    """
     last_error = ""
     for model in dict.fromkeys(models):
         for attempt in range(GROQ_RETRIES):
@@ -291,6 +297,10 @@ async def _call_groq(
             raise SubtitleError("GROQ_API_KEY ditolak Groq, cek lagi key-nya")
         if response.status_code == 429:
             raise SubtitleError("Kuota Groq lagi habis, coba lagi nanti")
+        if response.status_code in batch_errors:
+            message = _groq_message(response)
+            logger.warning("groq %s batch refused %s: %s", step, response.status_code, message)
+            raise BatchMismatch(f"groq {response.status_code}: {message}")
         if response.status_code >= 400:
             message = _groq_message(response)
             logger.warning("groq %s error %s: %s", step, response.status_code, message)
@@ -460,12 +470,20 @@ class GroqTranslator:
                     "model": model,
                     "temperature": 0.2,
                     "response_format": {"type": "json_object"},
+                    # Groq counts the reply allowance against tokens per minute up front: a modest
+                    # cap keeps one request from asking for more than the whole minute's budget.
+                    "max_completion_tokens": MAX_TRANSLATION_TOKENS,
+                    **({"reasoning_effort": "low"} if model.startswith("openai/gpt-oss") else {}),
                     "messages": [{"role": "user", "content": translation_prompt(texts, target)}],
                 },
                 timeout=180,
             )
 
-        response = await _call_groq(send, self._models, "terjemahan", self._record)
+        # 400: the model wrote broken JSON (json_validate_failed). 413: the batch is too big
+        # for the tokens per minute limit. Both get better with fewer lines.
+        response = await _call_groq(
+            send, self._models, "terjemahan", self._record, batch_errors=(400, 413)
+        )
         choices = response.json().get("choices") or [{}]
         content = choices[0].get("message", {}).get("content") or ""
         return _parse_numbered(content, len(texts))
