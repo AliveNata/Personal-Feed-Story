@@ -174,6 +174,25 @@ other containers (`.ts`, `.mkv`, `.avi`, `.wmv` and the like) are turned into MP
 without loss when the codecs allow it, encoded with H.264 otherwise. Copy your
 originals in if you want to keep them outside the app.
 
+### Subtitles
+
+In the viewer, a video gets a subtitle button in the top toolbar. It sends the audio to Groq
+(Whisper Large v3), which writes timed lines in the spoken language. Once that is done, the CC
+button in the video controls switches between off, the original language, English and Indonesia.
+A translation is made the first time it is picked, by Claude (Haiku). Results are saved per file,
+so each video is transcribed and translated once.
+
+Put both keys in `backend/.env`, then `docker compose up -d backend worker`:
+
+```bash
+GROQ_API_KEY=gsk_...        # console.groq.com, free tier is enough for personal use
+ANTHROPIC_API_KEY=sk-ant-...  # console.anthropic.com, used for translation only
+```
+
+The audio leaves your machine (to Groq), the translation sends only text (to Anthropic). Parts with
+music and no speech are left without subtitles. Subtitle jobs wait in the same queue as downloads,
+so a long download job delays them.
+
 ### Troubleshooting
 
 | Symptom | Fix |
@@ -231,6 +250,10 @@ Login required:
 | `DELETE /api/favorites/{id}` | Remove |
 | `POST /api/favorites/{id}/seen` | Clears the blue ring, called when the feed is opened |
 | `POST /api/favorites/check` | Queues a check of every favorite now |
+| `GET /api/items/{id}/subtitles` | Spoken language and the state of each track (`original`, `en`, `id`) |
+| `POST /api/items/{id}/subtitles` | Queues the transcription (once per file) |
+| `POST /api/items/{id}/subtitles/{en\|id}` | Queues a translation of the original track |
+| `GET /api/items/{id}/subtitles/{track}` | Timed lines of a finished track |
 
 Errors come back as `{"detail": "..."}`:
 

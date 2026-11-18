@@ -19,6 +19,15 @@ from app.favorites import service as favorites
 from app.library.archive import ImportStore, run_import
 from app.library.jobs import JobRunner
 from app.library.progress import RedisProgress
+from app.library.subtitles import (
+    ClaudeTranslator,
+    GroqTranscriber,
+    SubtitleFiles,
+    SubtitleStatus,
+    TranslationTarget,
+    run_transcription,
+    run_translation,
+)
 from app.library.types import MediaResolver
 from app.mediacache import MediaFileCache
 from app.sources.instagram import ANON_BUDGET_KEY
@@ -48,6 +57,20 @@ async def startup(ctx: dict[str, Any]) -> None:
         "tiktok": settings.tiktok_delay_seconds,
     }
     ctx["engine"] = engine
+    ctx["subtitle_files"] = SubtitleFiles(settings.library_dir)
+    ctx["subtitle_status"] = SubtitleStatus(redis)
+    ctx["transcriber"] = GroqTranscriber(
+        http_client,
+        settings.groq_api_key.get_secret_value(),
+        settings.groq_transcribe_model,
+        settings.groq_base_url,
+    )
+    ctx["translator"] = ClaudeTranslator(
+        http_client,
+        settings.anthropic_api_key.get_secret_value(),
+        settings.subtitle_translate_model,
+        settings.anthropic_base_url,
+    )
     ctx["http_client"] = http_client
     ctx["runner"] = JobRunner(
         build_session_factory(engine),
@@ -119,12 +142,32 @@ async def import_archive(ctx: dict[str, Any], import_id: str) -> None:
     )
 
 
+async def transcribe_subtitles(ctx: dict[str, Any], sha256: str, video_path: str) -> None:
+    await run_transcription(
+        sha256,
+        Path(video_path),
+        ctx["subtitle_files"],
+        ctx["subtitle_status"],
+        ctx["transcriber"],
+        get_settings().subtitle_chunk_seconds,
+    )
+
+
+async def translate_subtitles(ctx: dict[str, Any], sha256: str, target: TranslationTarget) -> None:
+    await run_translation(
+        sha256, target, ctx["subtitle_files"], ctx["subtitle_status"], ctx["translator"]
+    )
+
+
 class WorkerSettings:
     functions: ClassVar = [
         download_job,
         import_archive,
         # No stored result, so "Cek sekarang" can reuse the fixed job id right after a run.
         func(check_favorites, keep_result=0),
+        # No stored result either, so a failed subtitle can be generated again right away.
+        func(transcribe_subtitles, keep_result=0),
+        func(translate_subtitles, keep_result=0),
     ]
     cron_jobs: ClassVar = [
         # Every 2 hours: frequent enough for a hint, light on the request budget.

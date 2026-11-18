@@ -48,7 +48,7 @@ class FakeQueue:
     def __init__(self) -> None:
         self.jobs: list[str] = []
 
-    async def enqueue_job(self, name: str, job_id: str, **kwargs: Any) -> None:
+    async def enqueue_job(self, name: str, job_id: str, *args: Any, **kwargs: Any) -> None:
         self.jobs.append(job_id)
 
 
@@ -583,3 +583,52 @@ async def test_folder_category_defaults_to_lokal_and_can_change(client: httpx.As
     assert invalid.status_code == 422
     assert history[0]["action"] == "set_category"
     assert history[0]["detail"] == "ke Internasional"
+
+
+async def test_subtitles_generate_once_then_translate_and_serve_lines(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    # Arrange
+    from app.library.subtitles import Line, SubtitleFiles, SubtitleStatus, Transcript
+    from tests.test_subtitles import make_video
+
+    await login(client)
+    files = SubtitleFiles(tmp_path / "subs")
+    app.state.subtitle_files = files
+    app.state.subtitle_status = SubtitleStatus(fakeredis.FakeRedis())
+    folder_id = await _create_folder(client, session_factory)
+    video = make_video(tmp_path / "talk.mp4", seconds=2).read_bytes()
+    photo = _jpeg_bytes("red")
+    url = f"/api/folders/{folder_id}/files"
+    video_id = (await client.post(url, files={"file": ("talk.mp4", video, "video/mp4")})).json()[
+        "item"
+    ]["id"]
+    photo_id = (await client.post(url, files={"file": ("p.jpg", photo, "image/jpeg")})).json()[
+        "item"
+    ]["id"]
+    base = f"/api/items/{video_id}/subtitles"
+
+    # Act
+    before = await client.get(base)
+    early_translation = await client.post(f"{base}/en")
+    generated = await client.post(base)
+    generated_again = await client.post(base)
+    sha = app.state.queue.jobs[-1]
+    files.save(sha, "original", Transcript("id", [Line(0.0, 1.5, "halo semua")]))
+    translation = await client.post(f"{base}/en")
+    lines = await client.get(f"{base}/original")
+    missing = await client.get(f"{base}/id")
+    on_photo = await client.post(f"/api/items/{photo_id}/subtitles")
+
+    # Assert
+    assert [t["state"] for t in before.json()["tracks"]] == ["none", "none", "none"]
+    assert early_translation.status_code == 409
+    assert generated.status_code == 202
+    assert generated.json()["tracks"][0]["state"] == "queued"
+    assert generated_again.json()["tracks"][0]["state"] == "queued"
+    assert app.state.queue.jobs.count(sha) == 2  # one transcription, one translation
+    assert translation.json()["language"] == "id"
+    assert [t["state"] for t in translation.json()["tracks"]] == ["ready", "queued", "none"]
+    assert lines.json()["lines"] == [{"start": 0.0, "end": 1.5, "text": "halo semua"}]
+    assert missing.status_code == 404
+    assert on_photo.status_code == 400

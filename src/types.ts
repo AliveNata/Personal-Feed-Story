@@ -203,3 +203,31 @@ export interface StoriesResponse {
   fetchedAt: string | null;
   rate: RateInfo | null;
 }
+
+export type SubtitleTrackName = 'original' | 'en' | 'id';
+export type SubtitleTarget = Exclude<SubtitleTrackName, 'original'>;
+export type SubtitleState = 'none' | 'queued' | 'running' | 'failed' | 'ready';
+
+export interface SubtitleTrackState {
+  track: SubtitleTrackName;
+  state: SubtitleState;
+  error: string | null;
+}
+
+export interface SubtitleInfo {
+  // ISO 639-1 code of the spoken language, known once the original track is ready.
+  language: string | null;
+  tracks: SubtitleTrackState[];
+}
+
+export interface SubtitleLine {
+  start: number;
+  end: number;
+  text: string;
+}
+
+export interface SubtitleTrack {
+  track: SubtitleTrackName;
+  language: string | null;
+  lines: SubtitleLine[];
+}

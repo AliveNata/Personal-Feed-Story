@@ -27,7 +27,9 @@ from app.errors import SourceError
 from app.factory import build_sources, build_storage
 from app.favorites import routes as favorites_routes
 from app.library import routes as library_routes
+from app.library import subtitle_routes
 from app.library.archive import ImportStore
+from app.library.subtitles import SubtitleFiles, SubtitleStatus
 from app.library.types import MediaResolver
 from app.media import ALLOWED_CONTENT_TYPE_PREFIXES, is_allowed_media_url, referer_for
 from app.mediacache import MAX_CACHED_IMAGE_BYTES, MediaFileCache
@@ -80,6 +82,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.cache = PgPageCache(app.state.session_factory)
     app.state.media_cache = MediaFileCache(settings.library_dir / "mediacache")
     app.state.import_store = ImportStore(sync_redis)
+    app.state.subtitle_files = SubtitleFiles(settings.library_dir)
+    app.state.subtitle_status = SubtitleStatus(sync_redis)
     app.state.budget = sources.budget
     app.state.sources = {"tiktok": sources.tiktok, "instagram": sources.instagram}
     try:
@@ -103,6 +107,7 @@ app.add_middleware(
 )
 app.include_router(auth.router)
 app.include_router(library_routes.router)
+app.include_router(subtitle_routes.router)
 app.include_router(favorites_routes.router)
 app.include_router(session_routes.router)
 

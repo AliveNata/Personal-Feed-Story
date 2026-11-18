@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Rotation } from '../types';
+import { SubtitleControls } from './useSubtitles';
 import VideoControls from './VideoControls';
 import VideoSeekZones, { SeekFlash } from './VideoSeekZones';
 import { MAX_SCALE, MIN_SCALE, Point, ZoomState, clamp } from './zoom';
@@ -29,6 +30,7 @@ interface ZoomableMediaProps {
   onEnded?: () => void;
   rotation?: Rotation;
   isFullscreen?: boolean;
+  subtitles?: SubtitleControls | null;
 }
 
 /**
@@ -47,6 +49,7 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
   onEnded,
   rotation = 0,
   isFullscreen = false,
+  subtitles = null,
   zoom,
   setZoom,
   zoomAt,
@@ -231,6 +234,7 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
           rotation={rotation}
           isFullscreen={isFullscreen}
           onToggleFullscreen={onToggleFullscreen}
+          subtitles={subtitles}
         />
       )}
     </div>

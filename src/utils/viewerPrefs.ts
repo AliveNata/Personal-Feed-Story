@@ -3,6 +3,7 @@
 
 const REPEAT_KEY = 'viewer.repeatVideo';
 const SLIDESHOW_SECONDS_KEY = 'viewer.slideshowSeconds';
+const SUBTITLE_KEY = 'viewer.subtitle';
 
 export const SLIDESHOW_SPEEDS = [2, 3, 5, 10] as const;
 export type SlideshowSeconds = (typeof SLIDESHOW_SPEEDS)[number];
@@ -35,3 +36,11 @@ export const readSlideshowSeconds = (): SlideshowSeconds => {
 
 export const saveSlideshowSeconds = (seconds: SlideshowSeconds): void =>
   write(SLIDESHOW_SECONDS_KEY, String(seconds));
+
+export type SubtitleChoice = 'off' | 'original' | 'en' | 'id';
+const SUBTITLE_CHOICES: readonly SubtitleChoice[] = ['off', 'original', 'en', 'id'];
+
+export const readSubtitleChoice = (): SubtitleChoice =>
+  SUBTITLE_CHOICES.find((choice) => choice === read(SUBTITLE_KEY)) ?? 'original';
+
+export const saveSubtitleChoice = (choice: SubtitleChoice): void => write(SUBTITLE_KEY, choice);

@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Captions,
   ChevronLeft,
   ChevronRight,
+  Loader2,
   Maximize2,
   Minimize2,
   Pause,
@@ -25,6 +27,7 @@ import {
 import MoveForm from './MoveForm';
 import { ConfirmDelete, focusRing, secondaryButton } from './ui';
 import { SEEK_STEP_SECONDS, SeekFlash } from './VideoSeekZones';
+import { useSubtitles } from './useSubtitles';
 import ZoomableMedia from './ZoomableMedia';
 import { MAX_SCALE, useZoom } from './zoom';
 
@@ -73,6 +76,9 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
   const { zoom, setZoom, reset, zoomAt } = useZoom();
   const [isFullscreen, setIsFullscreen] = useState(false);
   const isVideo = item.mediaType === 'video';
+  const subtitles = useSubtitles(item.id, isVideo);
+  const isMakingSubtitles =
+    subtitles.originalState === 'queued' || subtitles.originalState === 'running';
   const [isMoving, setIsMoving] = useState(false);
   useEffect(() => setIsMoving(false), [item.id]);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -278,10 +284,42 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
             isFullscreen && isVideo ? 'hidden' : ''
           }`}
         >
-          <span className="text-sm">
-            {position} / {total}
-          </span>
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="shrink-0 text-sm">
+              {position} / {total}
+            </span>
+            {isMakingSubtitles && (
+              <span role="status" className="hidden truncate text-xs text-white/70 sm:inline">
+                Lagi bikin subtitle…
+              </span>
+            )}
+            {subtitles.error && !isMakingSubtitles && (
+              <span role="alert" className="truncate text-xs text-red-300" title={subtitles.error}>
+                {subtitles.error}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
+            {isVideo && subtitles.originalState !== null && subtitles.originalState !== 'ready' && (
+              <button
+                type="button"
+                onClick={subtitles.generate}
+                disabled={isMakingSubtitles}
+                aria-label={isMakingSubtitles ? 'Lagi bikin subtitle' : 'Generate subtitle'}
+                title={
+                  isMakingSubtitles
+                    ? 'Lagi bikin subtitle, bisa sambil nonton'
+                    : 'Generate subtitle dari suara di video'
+                }
+                className={`${navButton} disabled:!opacity-100`}
+              >
+                {isMakingSubtitles ? (
+                  <Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                ) : (
+                  <Captions className="h-5 w-5" aria-hidden="true" />
+                )}
+              </button>
+            )}
             {isVideo && (
               <button
                 type="button"
@@ -417,6 +455,7 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
             seekFlash={seekFlash}
             rotation={item.rotation}
             isFullscreen={isFullscreen}
+            subtitles={subtitles.controls}
           />
           <button
             type="button"

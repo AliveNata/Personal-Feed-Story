@@ -222,6 +222,8 @@ class LibraryStorage:
     def delete_blob_files(self, sha256: str, extension: str) -> None:
         self.blob_path(sha256, extension).unlink(missing_ok=True)
         self.thumbnail_path(sha256).unlink(missing_ok=True)
+        # Subtitles are kept per blob, they go with it.
+        shutil.rmtree(self.root / "subtitles" / sha256, ignore_errors=True)
 
     def _to_webp(self, source: Path) -> Path | None:
         target = source.with_suffix(".webp")

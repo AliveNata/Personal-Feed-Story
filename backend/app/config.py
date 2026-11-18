@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     transcode_videos: bool = False
     video_crf: int = Field(default=28, ge=0, le=51)
 
+    # Subtitles: Groq Whisper turns speech into timed lines, Claude translates them.
+    groq_api_key: SecretStr = SecretStr("")
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_transcribe_model: str = "whisper-large-v3"
+    anthropic_api_key: SecretStr = SecretStr("")
+    anthropic_base_url: str = "https://api.anthropic.com"
+    subtitle_translate_model: str = "claude-haiku-5-5"
+    # Audio is sent in pieces this long, each well under Groq's 25 MB upload cap.
+    subtitle_chunk_seconds: int = Field(default=1200, ge=60, le=3600)
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -17,6 +17,10 @@ import {
   MediaType,
   Platform,
   Rotation,
+  SubtitleInfo,
+  SubtitleTarget,
+  SubtitleTrack,
+  SubtitleTrackName,
   User,
 } from '../types';
 
@@ -337,5 +341,19 @@ export const selectionDownloadUrl = (itemIds: number[], folderName: string): str
 
 export const setItemRotation = (itemId: number, rotation: Rotation): Promise<MediaItem> =>
   request<MediaItem>(`/api/items/${itemId}/rotation`, { method: 'PUT', json: { rotation } });
+
+export const fetchSubtitleInfo = (itemId: number): Promise<SubtitleInfo> =>
+  request<SubtitleInfo>(`/api/items/${itemId}/subtitles`);
+
+export const generateSubtitles = (itemId: number): Promise<SubtitleInfo> =>
+  request<SubtitleInfo>(`/api/items/${itemId}/subtitles`, { method: 'POST' });
+
+export const translateSubtitles = (itemId: number, target: SubtitleTarget): Promise<SubtitleInfo> =>
+  request<SubtitleInfo>(`/api/items/${itemId}/subtitles/${target}`, { method: 'POST' });
+
+export const fetchSubtitleTrack = (
+  itemId: number,
+  track: SubtitleTrackName,
+): Promise<SubtitleTrack> => request<SubtitleTrack>(`/api/items/${itemId}/subtitles/${track}`);
 
 export const folderZipUrl = (folderId: number): string => `/api/folders/${folderId}/zip`;

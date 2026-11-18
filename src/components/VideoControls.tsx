@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Maximize, Minimize, Pause, Play, Volume2, VolumeX } from 'lucide-react';
+import { Captions, Check, Loader2, Maximize, Minimize, Pause, Play, Volume2, VolumeX } from 'lucide-react';
 import { Rotation } from '../types';
+import { SubtitleControls } from './useSubtitles';
 
 // The preview is drawn this wide; its height follows the video.
 const PREVIEW_WIDTH = 176;
@@ -88,6 +89,8 @@ interface VideoControlsProps {
   rotation: Rotation;
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
+  // Null until the video has subtitles: the CC button appears only then.
+  subtitles?: SubtitleControls | null;
 }
 
 /**
@@ -101,7 +104,35 @@ const VideoControls: React.FC<VideoControlsProps> = ({
   rotation,
   isFullscreen,
   onToggleFullscreen,
+  subtitles,
 }) => {
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // A click anywhere else closes the subtitle menu, and Escape closes the menu, not the viewer.
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setIsMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setIsMenuOpen(false);
+    };
+    // A closing dialog would also take the menu with it, so it must not see this Escape.
+    const keepDialogOpen = (event: Event) => event.preventDefault();
+    const dialog = menuRef.current?.closest('dialog');
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', closeOnEscape, true);
+    dialog?.addEventListener('cancel', keepDialogOpen);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('keydown', closeOnEscape, true);
+      dialog?.removeEventListener('cancel', keepDialogOpen);
+    };
+  }, [isMenuOpen]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -142,7 +173,10 @@ const VideoControls: React.FC<VideoControlsProps> = ({
       // Stays while paused, scrubbing, or while a control has keyboard focus.
       const video = videoRef.current;
       const hasFocus = barRef.current?.contains(document.activeElement) ?? false;
-      if (video && !video.paused && !isScrubbing.current && !hasFocus) setIsVisible(false);
+      if (video && !video.paused && !isScrubbing.current && !hasFocus) {
+        setIsVisible(false);
+        setIsMenuOpen(false);
+      }
     }, HIDE_AFTER_MS);
   }, [videoRef]);
 
@@ -224,142 +258,218 @@ const VideoControls: React.FC<VideoControlsProps> = ({
     ? Math.min(Math.max(hover.x - previewWidth / 2, 0), Math.max(trackWidth - previewWidth, 0))
     : 0;
 
+  const cue = subtitles?.lines?.find((line) => line.start <= current && current < line.end) ?? null;
+  const isSubtitleOn = Boolean(subtitles && subtitles.choice !== 'off');
+
   const button = 'flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-white hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white';
 
   return (
-    <div
-      ref={barRef}
-      data-video-controls
-      // The frame pans and zooms on pointer events: none of that may start from the controls.
-      onPointerDown={(event) => event.stopPropagation()}
-      onPointerUp={(event) => event.stopPropagation()}
-      onDoubleClick={(event) => event.stopPropagation()}
-      onFocus={() => setIsVisible(true)}
-      className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-8 transition-opacity duration-200 motion-reduce:transition-none ${
-        isVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
-      }`}
-    >
+    <>
+      {cue && (
+        // Above the bar while it shows, lower once it fades, like most players.
+        <div
+          aria-live="off"
+          className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center px-4 transition-[bottom] duration-200 motion-reduce:transition-none ${
+            isVisible ? 'bottom-28' : 'bottom-6'
+          }`}
+        >
+          <p className="max-w-[92%] whitespace-pre-line rounded bg-black/75 px-2 py-0.5 text-center text-base leading-snug text-white sm:text-lg">
+            {cue.text}
+          </p>
+        </div>
+      )}
       <div
-        className="relative"
-        onPointerMove={(event) => {
-          if (event.pointerType === 'mouse' || isScrubbing.current) preview(event.clientX);
-          if (isScrubbing.current) seekTo(event.clientX);
-        }}
-        onPointerLeave={() => {
-          if (!isScrubbing.current) setHover(null);
-        }}
+        ref={barRef}
+        data-video-controls
+        // The frame pans and zooms on pointer events: none of that may start from the controls.
+        onPointerDown={(event) => event.stopPropagation()}
+        onPointerUp={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+        onFocus={() => setIsVisible(true)}
+        className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-8 transition-opacity duration-200 motion-reduce:transition-none ${
+          isVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
+        }`}
       >
-        {hover && (
-          <div
-            aria-hidden="true"
-            style={{ left: previewLeft, width: previewWidth }}
-            className="pointer-events-none absolute bottom-6 overflow-hidden rounded-md border-2 border-white bg-black shadow-lg"
-          >
+        <div
+          className="relative"
+          onPointerMove={(event) => {
+            if (event.pointerType === 'mouse' || isScrubbing.current) preview(event.clientX);
+            if (isScrubbing.current) seekTo(event.clientX);
+          }}
+          onPointerLeave={() => {
+            if (!isScrubbing.current) setHover(null);
+          }}
+        >
+          {hover && (
             <div
-              className="relative flex items-center justify-center overflow-hidden"
-              style={{ width: previewWidth, height: Math.round(previewWidth / previewAspect) }}
+              aria-hidden="true"
+              style={{ left: previewLeft, width: previewWidth }}
+              className="pointer-events-none absolute bottom-6 overflow-hidden rounded-md border-2 border-white bg-black shadow-lg"
             >
-              <canvas
-                ref={canvasRef}
-                style={{ transform: rotation ? `rotate(${rotation}deg)` : undefined, width: PREVIEW_WIDTH }}
-                className={`shrink-0 ${ready ? '' : 'opacity-0'}`}
+              <div
+                className="relative flex items-center justify-center overflow-hidden"
+                style={{ width: previewWidth, height: Math.round(previewWidth / previewAspect) }}
+              >
+                <canvas
+                  ref={canvasRef}
+                  style={{ transform: rotation ? `rotate(${rotation}deg)` : undefined, width: PREVIEW_WIDTH }}
+                  className={`shrink-0 ${ready ? '' : 'opacity-0'}`}
+                />
+              </div>
+              <span className="absolute inset-x-0 bottom-0 bg-black/70 py-0.5 text-center text-xs font-semibold text-white">
+                {formatTime(hover.time)}
+              </span>
+            </div>
+          )}
+          <div
+            ref={trackRef}
+            role="slider"
+            tabIndex={0}
+            aria-label="Posisi video"
+            aria-valuemin={0}
+            aria-valuemax={Math.round(duration)}
+            aria-valuenow={Math.round(current)}
+            aria-valuetext={`${formatTime(current)} dari ${formatTime(duration)}`}
+            onKeyDown={onSliderKey}
+            onPointerDown={(event) => {
+              isScrubbing.current = true;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              preview(event.clientX);
+              seekTo(event.clientX);
+            }}
+            onPointerUp={(event) => {
+              isScrubbing.current = false;
+              event.currentTarget.releasePointerCapture(event.pointerId);
+              if (event.pointerType !== 'mouse') setHover(null);
+            }}
+            onPointerCancel={() => {
+              isScrubbing.current = false;
+              setHover(null);
+            }}
+            // Tall hit area for fingers, thin line for the eye.
+            className="group relative flex h-6 cursor-pointer touch-none items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          >
+            <div className="relative h-1 w-full rounded-full bg-white/30 transition-[height] group-hover:h-1.5">
+              <div className="absolute inset-y-0 left-0 rounded-full bg-white/40" style={{ width: `${loaded}%` }} />
+              <div className="absolute inset-y-0 left-0 rounded-full bg-red-600" style={{ width: `${played}%` }} />
+              <div
+                className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-red-600 shadow"
+                style={{ left: `${played}%` }}
               />
             </div>
-            <span className="absolute inset-x-0 bottom-0 bg-black/70 py-0.5 text-center text-xs font-semibold text-white">
-              {formatTime(hover.time)}
-            </span>
-          </div>
-        )}
-        <div
-          ref={trackRef}
-          role="slider"
-          tabIndex={0}
-          aria-label="Posisi video"
-          aria-valuemin={0}
-          aria-valuemax={Math.round(duration)}
-          aria-valuenow={Math.round(current)}
-          aria-valuetext={`${formatTime(current)} dari ${formatTime(duration)}`}
-          onKeyDown={onSliderKey}
-          onPointerDown={(event) => {
-            isScrubbing.current = true;
-            event.currentTarget.setPointerCapture(event.pointerId);
-            preview(event.clientX);
-            seekTo(event.clientX);
-          }}
-          onPointerUp={(event) => {
-            isScrubbing.current = false;
-            event.currentTarget.releasePointerCapture(event.pointerId);
-            if (event.pointerType !== 'mouse') setHover(null);
-          }}
-          onPointerCancel={() => {
-            isScrubbing.current = false;
-            setHover(null);
-          }}
-          // Tall hit area for fingers, thin line for the eye.
-          className="group relative flex h-6 cursor-pointer touch-none items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-        >
-          <div className="relative h-1 w-full rounded-full bg-white/30 transition-[height] group-hover:h-1.5">
-            <div className="absolute inset-y-0 left-0 rounded-full bg-white/40" style={{ width: `${loaded}%` }} />
-            <div className="absolute inset-y-0 left-0 rounded-full bg-red-600" style={{ width: `${played}%` }} />
-            <div
-              className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-red-600 shadow"
-              style={{ left: `${played}%` }}
-            />
           </div>
         </div>
-      </div>
 
-      <div className="flex items-center gap-1 text-white">
-        <button type="button" onClick={togglePlay} aria-label={isPlaying ? 'Jeda' : 'Putar'} className={button}>
-          {isPlaying ? <Pause className="h-5 w-5" aria-hidden="true" /> : <Play className="h-5 w-5" aria-hidden="true" />}
-        </button>
-        <button
-          type="button"
-          onClick={toggleMute}
-          aria-label={isMuted ? 'Nyalakan suara' : 'Bisukan'}
-          className={button}
-        >
-          {isMuted || volume === 0 ? (
-            <VolumeX className="h-5 w-5" aria-hidden="true" />
-          ) : (
-            <Volume2 className="h-5 w-5" aria-hidden="true" />
+        <div className="flex items-center gap-1 text-white">
+          <button type="button" onClick={togglePlay} aria-label={isPlaying ? 'Jeda' : 'Putar'} className={button}>
+            {isPlaying ? <Pause className="h-5 w-5" aria-hidden="true" /> : <Play className="h-5 w-5" aria-hidden="true" />}
+          </button>
+          <button
+            type="button"
+            onClick={toggleMute}
+            aria-label={isMuted ? 'Nyalakan suara' : 'Bisukan'}
+            className={button}
+          >
+            {isMuted || volume === 0 ? (
+              <VolumeX className="h-5 w-5" aria-hidden="true" />
+            ) : (
+              <Volume2 className="h-5 w-5" aria-hidden="true" />
+            )}
+          </button>
+          <label className="sr-only" htmlFor="video-volume">
+            Volume
+          </label>
+          <input
+            id="video-volume"
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={isMuted ? 0 : volume}
+            onChange={(event) => {
+              const video = videoRef.current;
+              if (!video) return;
+              video.volume = Number(event.target.value);
+              video.muted = video.volume === 0;
+            }}
+            className="hidden w-20 accent-white sm:block"
+          />
+          <span className="ml-2 text-sm tabular-nums">
+            {formatTime(current)} / {formatTime(duration)}
+          </span>
+          {subtitles && (
+            <div className="relative ml-auto">
+              <button
+                type="button"
+                onClick={() => setIsMenuOpen((open) => !open)}
+                aria-label="Subtitle"
+                aria-haspopup="menu"
+                aria-expanded={isMenuOpen}
+                className={`${button} ${isSubtitleOn ? 'text-white' : 'text-white/60'}`}
+              >
+                <Captions className="h-5 w-5" aria-hidden="true" />
+                {isSubtitleOn && (
+                  <span className="absolute bottom-2 left-1/2 h-0.5 w-5 -translate-x-1/2 rounded bg-red-600" />
+                )}
+              </button>
+              {isMenuOpen && (
+                <div
+                  role="menu"
+                  aria-label="Bahasa subtitle"
+                  className="absolute bottom-full right-0 mb-2 min-w-48 rounded-md bg-gray-900/95 py-1 text-sm shadow-lg"
+                >
+                  {subtitles.options.map((option) => {
+                    const isChosen = option.choice === subtitles.choice;
+                    const note =
+                      option.state === 'queued' || option.state === 'running'
+                        ? 'lagi diterjemahin'
+                        : option.state === 'failed'
+                          ? 'gagal, klik lagi'
+                          : null;
+                    return (
+                      <button
+                        key={option.choice}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={isChosen}
+                        onClick={() => {
+                          subtitles.onChoose(option.choice);
+                          setIsMenuOpen(false);
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-white hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none"
+                      >
+                        <Check className={`h-4 w-4 shrink-0 ${isChosen ? '' : 'invisible'}`} aria-hidden="true" />
+                        <span>{option.label}</span>
+                        {note && (
+                          <span className="ml-auto flex items-center gap-1 pl-3 text-xs text-white/60">
+                            {note === 'lagi diterjemahin' && (
+                              <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                            )}
+                            {note}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           )}
-        </button>
-        <label className="sr-only" htmlFor="video-volume">
-          Volume
-        </label>
-        <input
-          id="video-volume"
-          type="range"
-          min={0}
-          max={1}
-          step={0.05}
-          value={isMuted ? 0 : volume}
-          onChange={(event) => {
-            const video = videoRef.current;
-            if (!video) return;
-            video.volume = Number(event.target.value);
-            video.muted = video.volume === 0;
-          }}
-          className="hidden w-20 accent-white sm:block"
-        />
-        <span className="ml-2 text-sm tabular-nums">
-          {formatTime(current)} / {formatTime(duration)}
-        </span>
-        <button
-          type="button"
-          onClick={onToggleFullscreen}
-          aria-label={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
-          className={`${button} ml-auto`}
-        >
-          {isFullscreen ? (
-            <Minimize className="h-5 w-5" aria-hidden="true" />
-          ) : (
-            <Maximize className="h-5 w-5" aria-hidden="true" />
-          )}
-        </button>
+          <button
+            type="button"
+            onClick={onToggleFullscreen}
+            aria-label={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
+            className={`${button} ${subtitles ? '' : 'ml-auto'}`}
+          >
+            {isFullscreen ? (
+              <Minimize className="h-5 w-5" aria-hidden="true" />
+            ) : (
+              <Maximize className="h-5 w-5" aria-hidden="true" />
+            )}
+          </button>
+        </div>
       </div>
-    </div>
+    </>
   );
 };
 
