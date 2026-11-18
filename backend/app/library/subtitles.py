@@ -16,11 +16,14 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import httpx
 from redis import Redis
 from redis.exceptions import RedisError
+
+if TYPE_CHECKING:
+    from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +329,56 @@ class Translator(Protocol):
     async def translate(self, texts: list[str], target: TranslationTarget) -> list[str]: ...
 
 
+def translation_prompt(texts: list[str], target: TranslationTarget) -> str:
+    return (
+        f"Translate these video subtitle lines into {TARGET_NAMES[target]}. "
+        "Keep each line short like a subtitle and keep names as they are. "
+        "Reply with only a JSON array of strings, one per input line, same order and the "
+        f"same count ({len(texts)}).\n\n" + json.dumps(texts, ensure_ascii=False)
+    )
+
+
+class GroqTranslator:
+    """A text model on Groq, the same key and free tier as the transcription."""
+
+    def __init__(self, client: httpx.AsyncClient, api_key: str, model: str, base_url: str) -> None:
+        self._client = client
+        self._api_key = api_key
+        self._model = model
+        self._url = f"{base_url.rstrip('/')}/chat/completions"
+
+    async def translate(self, texts: list[str], target: TranslationTarget) -> list[str]:
+        if not self._api_key:
+            raise SubtitleError("GROQ_API_KEY belum diisi di backend/.env")
+        for attempt in range(GROQ_RETRIES):
+            response = await self._client.post(
+                self._url,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json={
+                    "model": self._model,
+                    "temperature": 0.2,
+                    "messages": [{"role": "user", "content": translation_prompt(texts, target)}],
+                },
+                timeout=180,
+            )
+            if response.status_code == 429 and attempt < GROQ_RETRIES - 1:
+                wait = _retry_after(response, default=20 * (attempt + 1))
+                logger.info("groq rate limited, waiting %.0fs", wait)
+                await asyncio.sleep(wait)
+                continue
+            if response.status_code in (401, 403):
+                raise SubtitleError("GROQ_API_KEY ditolak Groq, cek lagi key-nya")
+            if response.status_code == 429:
+                raise SubtitleError("Kuota Groq lagi habis, coba lagi nanti")
+            if response.status_code >= 400:
+                logger.warning("groq error %s: %s", response.status_code, response.text[:500])
+                raise SubtitleError(f"Groq error {response.status_code}")
+            choices = response.json().get("choices") or [{}]
+            content = choices[0].get("message", {}).get("content") or ""
+            return _parse_lines(content, len(texts))
+        raise SubtitleError("Kuota Groq lagi habis, coba lagi nanti")
+
+
 class ClaudeTranslator:
     def __init__(self, client: httpx.AsyncClient, api_key: str, model: str, base_url: str) -> None:
         self._client = client
@@ -336,12 +389,7 @@ class ClaudeTranslator:
     async def translate(self, texts: list[str], target: TranslationTarget) -> list[str]:
         if not self._api_key:
             raise SubtitleError("ANTHROPIC_API_KEY belum diisi di backend/.env")
-        prompt = (
-            f"Translate these video subtitle lines into {TARGET_NAMES[target]}. "
-            "Keep each line short like a subtitle and keep names as they are. "
-            "Reply with only a JSON array of strings, one per input line, same order and the "
-            f"same count ({len(texts)}).\n\n" + json.dumps(texts, ensure_ascii=False)
-        )
+        prompt = translation_prompt(texts, target)
         response = await self._client.post(
             self._url,
             headers={
@@ -368,6 +416,22 @@ class ClaudeTranslator:
             if block.get("type") == "text"
         )
         return _parse_lines(text, len(texts))
+
+
+def build_translator(settings: "Settings", client: httpx.AsyncClient) -> Translator:
+    if settings.subtitle_translator == "anthropic":
+        return ClaudeTranslator(
+            client,
+            settings.anthropic_api_key.get_secret_value(),
+            settings.claude_translate_model,
+            settings.anthropic_base_url,
+        )
+    return GroqTranslator(
+        client,
+        settings.groq_api_key.get_secret_value(),
+        settings.groq_translate_model,
+        settings.groq_base_url,
+    )
 
 
 class BatchMismatch(Exception):

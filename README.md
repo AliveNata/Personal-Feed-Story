@@ -179,19 +179,19 @@ originals in if you want to keep them outside the app.
 In the viewer, a video gets a subtitle button in the top toolbar. It sends the audio to Groq
 (Whisper Large v3), which writes timed lines in the spoken language. Once that is done, the CC
 button in the video controls switches between off, the original language, English and Indonesia.
-A translation is made the first time it is picked, by Claude (Haiku). The subtitle button shows
+A translation is made the first time it is picked, by a text model on Groq (same key, free tier).
+Set `SUBTITLE_TRANSLATOR=anthropic` plus `ANTHROPIC_API_KEY` to translate with Claude instead. The subtitle button shows
 the progress in percent, and the CC menu shows it for a translation. Results are saved on the
 server per file (`data/library/subtitles/`), so each video is transcribed and translated once, and
 they are deleted together with the video.
 
-Put both keys in `backend/.env`, then `docker compose up -d backend worker`:
+Put the key in `backend/.env`, then `docker compose up -d backend worker`:
 
 ```bash
-GROQ_API_KEY=gsk_...        # console.groq.com, free tier is enough for personal use
-ANTHROPIC_API_KEY=sk-ant-...  # console.anthropic.com, used for translation only
+GROQ_API_KEY=gsk_...   # console.groq.com, free tier is enough for personal use
 ```
 
-The audio leaves your machine (to Groq), the translation sends only text (to Anthropic). Parts with
+The audio leaves your machine (to Groq). With Claude as translator, only the text goes to Anthropic. Parts with
 music and no speech are left without subtitles. Subtitle jobs wait in the same queue as downloads,
 so a long download job delays them.
 

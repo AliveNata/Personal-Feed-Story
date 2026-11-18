@@ -20,11 +20,11 @@ from app.library.archive import ImportStore, run_import
 from app.library.jobs import JobRunner
 from app.library.progress import RedisProgress
 from app.library.subtitles import (
-    ClaudeTranslator,
     GroqTranscriber,
     SubtitleFiles,
     SubtitleStatus,
     TranslationTarget,
+    build_translator,
     run_transcription,
     run_translation,
 )
@@ -65,12 +65,7 @@ async def startup(ctx: dict[str, Any]) -> None:
         settings.groq_transcribe_model,
         settings.groq_base_url,
     )
-    ctx["translator"] = ClaudeTranslator(
-        http_client,
-        settings.anthropic_api_key.get_secret_value(),
-        settings.subtitle_translate_model,
-        settings.anthropic_base_url,
-    )
+    ctx["translator"] = build_translator(settings, http_client)
     ctx["http_client"] = http_client
     ctx["runner"] = JobRunner(
         build_session_factory(engine),

@@ -12,6 +12,7 @@ from app.library.subtitles import (
     BatchMismatch,
     ClaudeTranslator,
     GroqTranscriber,
+    GroqTranslator,
     Line,
     SubtitleError,
     SubtitleFiles,
@@ -22,6 +23,7 @@ from app.library.subtitles import (
 
 GROQ_URL = "https://groq.test/openai/v1/audio/transcriptions"
 CLAUDE_URL = "https://claude.test/v1/messages"
+GROQ_CHAT_URL = "https://groq.test/openai/v1/chat/completions"
 
 
 def make_video(path: Path, seconds: int, with_audio: bool = True) -> Path:
@@ -223,6 +225,47 @@ async def test_claude_reply_with_wrong_line_count_is_a_batch_mismatch() -> None:
         # Act / Assert
         with pytest.raises(BatchMismatch):
             await claude.translate(["a", "b"], "en")
+
+
+@respx.mock
+async def test_groq_translator_reads_the_chat_reply_and_retries_after_rate_limit() -> None:
+    # Arrange
+    reply = {"choices": [{"message": {"content": '```json\n["Halo", "Sampai jumpa"]\n```'}}]}
+    route = respx.post(GROQ_CHAT_URL).mock(
+        side_effect=[httpx.Response(429), httpx.Response(200, json=reply)]
+    )
+    async with httpx.AsyncClient() as client:
+        groq = GroqTranslator(
+            client, "gsk_test", "llama-3.3-70b-versatile", "https://groq.test/openai/v1"
+        )
+
+        # Act
+        lines = await groq.translate(["Hello", "See you"], "id")
+
+    # Assert
+    assert lines == ["Halo", "Sampai jumpa"]
+    assert route.call_count == 2
+    sent = json.loads(route.calls[1].request.content)
+    assert sent["model"] == "llama-3.3-70b-versatile"
+    assert route.calls[1].request.headers["authorization"] == "Bearer gsk_test"
+
+
+def test_translator_follows_the_setting() -> None:
+    # Arrange
+    from app.config import Settings
+
+    groq_settings = Settings(_env_file=None, subtitle_translator="groq")
+    claude_settings = Settings(_env_file=None, subtitle_translator="anthropic")
+    client = httpx.AsyncClient()
+
+    # Act
+    default = subtitles.build_translator(groq_settings, client)
+    claude = subtitles.build_translator(claude_settings, client)
+
+    # Assert
+    assert isinstance(default, GroqTranslator)
+    assert isinstance(claude, ClaudeTranslator)
+    assert Settings(_env_file=None).subtitle_translator == "groq"
 
 
 async def test_refused_batch_keeps_original_lines_and_others_are_translated() -> None:
