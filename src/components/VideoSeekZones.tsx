@@ -4,8 +4,8 @@ import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 export const SEEK_STEP_SECONDS = 5;
 // Taps closer together than this count as one double tap, and keep adding 5 seconds.
 const DOUBLE_TAP_MS = 300;
-// Room left at the bottom for the native seek bar and buttons.
-const CONTROLS_HEIGHT = 'calc(100% - 4.5rem)';
+// Room left at the bottom for the control bar (VideoControls), so taps there reach its buttons.
+const CONTROLS_HEIGHT = 'calc(100% - 7rem)';
 
 type Side = 'back' | 'forward';
 
@@ -26,7 +26,7 @@ interface VideoSeekZonesProps {
  * Left and right thirds over a video, the way phone players work: double tap on the left goes
  * back 5 seconds, on the right forward, each extra tap adds 5. A single tap plays or pauses.
  * With a mouse, double click toggles full screen, the desktop convention.
- * The middle and the bottom stay free, so the native controls keep working there.
+ * The middle and the bottom stay free, for a tap to play or pause and for the control bar.
  */
 const VideoSeekZones: React.FC<VideoSeekZonesProps> = ({
   onSeek,

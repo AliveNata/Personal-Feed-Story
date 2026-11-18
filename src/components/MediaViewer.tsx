@@ -392,6 +392,7 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
             onToggleFullscreen={toggleFullscreen}
             seekFlash={seekFlash}
             rotation={item.rotation}
+            isFullscreen={isFullscreen}
           />
           <button
             type="button"

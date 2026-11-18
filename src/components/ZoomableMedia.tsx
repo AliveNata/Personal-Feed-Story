@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Rotation } from '../types';
+import VideoControls from './VideoControls';
 import VideoSeekZones, { SeekFlash } from './VideoSeekZones';
 import { MAX_SCALE, MIN_SCALE, Point, ZoomState, clamp } from './zoom';
 
@@ -27,12 +28,13 @@ interface ZoomableMediaProps {
   autoPlay?: boolean;
   onEnded?: () => void;
   rotation?: Rotation;
+  isFullscreen?: boolean;
 }
 
 /**
  * Wheel, drag to pan and two finger pinch for photos and videos, double click for photos.
- * Videos keep their native controls at 100%. Zoomed in, the controls would be scaled and
- * pushed off screen with the video, so they hide and a tap plays or pauses instead.
+ * Videos get our own control bar, laid over the frame: it stays upright and in place while the
+ * video is zoomed or rotated. A tap on the video itself plays or pauses.
  */
 const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
   kind,
@@ -44,6 +46,7 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
   autoPlay = false,
   onEnded,
   rotation = 0,
+  isFullscreen = false,
   zoom,
   setZoom,
   zoomAt,
@@ -160,8 +163,10 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
       start !== null &&
       Math.hypot(event.clientX - start.x, event.clientY - start.y) < TAP_SLOP_PX &&
       pointers.current.size === 1;
-    const onZone = (event.target as HTMLElement).closest('[data-seek-zone]') !== null;
-    if (isTap && kind === 'video' && zoom.scale > 1 && !onZone) {
+    const target = event.target as HTMLElement;
+    const onZone = target.closest('[data-seek-zone]') !== null;
+    const onControls = target.closest('[data-video-controls]') !== null;
+    if (isTap && kind === 'video' && !onZone && !onControls) {
       const video = videoRef?.current;
       if (video) void (video.paused ? video.play() : video.pause());
     }
@@ -199,7 +204,7 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
           ref={videoRef}
           src={src}
           poster={poster}
-          controls={!isZoomed}
+          controls={false}
           loop={loop}
           autoPlay={autoPlay}
           onEnded={onEnded}
@@ -211,14 +216,21 @@ const ZoomableMedia: React.FC<ZoomableMediaProps> = ({
       ) : (
         <img src={src} alt={alt} draggable={false} style={mediaStyle} className={mediaClass} />
       )}
-      {/* The tap zones assume the player's own controls sit along the bottom edge. Turned, those
-          controls run along a side under a zone, so the zones step aside and keys still seek. */}
-      {kind === 'video' && rotation === 0 && onSeek && onTogglePlay && onToggleFullscreen && (
+      {kind === 'video' && onSeek && onTogglePlay && onToggleFullscreen && (
         <VideoSeekZones
           onSeek={onSeek}
           onTogglePlay={onTogglePlay}
           onToggleFullscreen={onToggleFullscreen}
           flash={seekFlash}
+        />
+      )}
+      {kind === 'video' && videoRef && onToggleFullscreen && (
+        <VideoControls
+          videoRef={videoRef}
+          src={src}
+          rotation={rotation}
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={onToggleFullscreen}
         />
       )}
     </div>
