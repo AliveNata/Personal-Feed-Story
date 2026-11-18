@@ -256,7 +256,12 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
       className="m-0 h-full max-h-none w-full max-w-none bg-black/90 p-0 backdrop:bg-black/60"
     >
       <div ref={stageRef} className={`flex h-full flex-col ${isFullscreen ? 'bg-black' : ''}`}>
-        <div className="flex items-center justify-between gap-2 p-3 text-white">
+        {/* A fullscreen video keeps only its own controls, Back or Esc brings the toolbar back. */}
+        <div
+          className={`flex items-center justify-between gap-2 p-3 text-white ${
+            isFullscreen && isVideo ? 'hidden' : ''
+          }`}
+        >
           <span className="text-sm">
             {position} / {total}
           </span>
