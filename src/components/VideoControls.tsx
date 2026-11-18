@@ -471,7 +471,7 @@ const VideoControls: React.FC<VideoControlsProps> = ({
                       key={action.key}
                       type="button"
                       role="menuitem"
-                      disabled={action.isWorking}
+                      disabled={action.isWorking || action.isDisabled}
                       onClick={() => {
                         action.onSelect();
                         setIsMenuOpen(false);

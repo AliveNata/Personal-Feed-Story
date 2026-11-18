@@ -202,6 +202,12 @@ The Session page shows the remaining Groq and Anthropic rate limits, as reported
 answers (so they refresh with each subtitle job). The Anthropic credit balance has no API, check it
 on the console billing page.
 
+The card also estimates this month's Claude spend from the tokens of the app's own calls, priced
+with `CLAUDE_INPUT_USD_PER_MTOK` and `CLAUDE_OUTPUT_USD_PER_MTOK` (Haiku 5.5 rates by default). Set
+`CLAUDE_MONTHLY_BUDGET_USD` (for example `2`) to stop Claude jobs once the estimate reaches it. For
+a hard cap enforced by Anthropic, give this app its own workspace and key in the console and set a
+spend limit there.
+
 The audio leaves your machine (to Groq). With Claude as translator, only the text goes to Anthropic. Parts with
 music and no speech are left without subtitles. Subtitle jobs wait in the same queue as downloads,
 so a long download job delays them.

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Annotated, Literal
 
 from arq.connections import ArqRedis
@@ -8,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_db, require_user
 from app.config import get_settings
 from app.db import MediaItem
-from app.library.ai_quota import QuotaStore
+from app.library.ai_quota import ClaudeSpend, QuotaStore
 from app.library.routes import get_queue, get_storage
 from app.library.storage import LibraryStorage
 from app.library.subtitles import (
@@ -60,6 +61,8 @@ class SubtitleInfo(CamelModel):
     tracks: list[TrackState]
     # ANTHROPIC_API_KEY is set: a Groq translation can be made more natural with Claude.
     claude_available: bool
+    # This month's Claude estimate reached CLAUDE_MONTHLY_BUDGET_USD.
+    claude_budget_reached: bool = False
 
 
 class SubtitleLine(CamelModel):
@@ -107,7 +110,7 @@ async def _video(db: AsyncSession, item_id: int) -> MediaItem:
 
 
 def _info(
-    sha256: str, files: SubtitleFiles, status: SubtitleStatus, claude_available: bool
+    sha256: str, files: SubtitleFiles, status: SubtitleStatus, claude: "ClaudeState"
 ) -> SubtitleInfo:
     tracks: list[TrackState] = []
     for track in TRACKS:
@@ -133,15 +136,38 @@ def _info(
     return SubtitleInfo(
         language=original.language if original else None,
         tracks=tracks,
-        claude_available=claude_available,
+        claude_available=claude.available,
+        claude_budget_reached=claude.budget_reached,
     )
 
 
-def get_claude_available() -> bool:
-    return bool(get_settings().anthropic_api_key.get_secret_value())
+@dataclass(frozen=True)
+class ClaudeState:
+    available: bool
+    budget_reached: bool
 
 
-ClaudeAvailable = Annotated[bool, Depends(get_claude_available)]
+def get_claude_spend(request: Request) -> ClaudeSpend:
+    spend: ClaudeSpend = request.app.state.claude_spend
+    return spend
+
+
+def get_claude_available(
+    spend: Annotated[ClaudeSpend, Depends(get_claude_spend)],
+) -> ClaudeState:
+    available = bool(get_settings().anthropic_api_key.get_secret_value())
+    return ClaudeState(available, available and spend.is_over_budget())
+
+
+ClaudeAvailable = Annotated[ClaudeState, Depends(get_claude_available)]
+
+
+def _refuse_over_budget(claude: ClaudeState) -> None:
+    if claude.budget_reached:
+        raise HTTPException(
+            status_code=409,
+            detail="Budget Claude bulan ini udah kepakai, naikin CLAUDE_MONTHLY_BUDGET_USD",
+        )
 
 
 @router.get("/items/{item_id}/subtitles", response_model=SubtitleInfo)
@@ -195,6 +221,8 @@ async def translate_subtitles(
     if not files.has(sha, "original"):
         raise HTTPException(status_code=409, detail="Generate subtitle dulu")
     if not files.has(sha, target) and not _is_pending(status, sha, target):
+        if get_settings().subtitle_translator == "anthropic":
+            _refuse_over_budget(claude)
         status.set(sha, target, "queued")
         await queue.enqueue_job(
             "translate_subtitles", sha, target, _job_id=f"subtitle-{sha}-{target}"
@@ -210,12 +238,14 @@ async def _redo(
     files: SubtitleFiles,
     status: SubtitleStatus,
     queue: ArqRedis,
-    claude: bool,
+    claude: ClaudeState,
 ) -> SubtitleInfo:
     item = await _video(db, item_id)
     sha = item.blob_sha256
-    if use_claude and not claude:
+    if use_claude and not claude.available:
         raise HTTPException(status_code=400, detail="ANTHROPIC_API_KEY belum diisi di backend/.env")
+    if use_claude or get_settings().subtitle_translator == "anthropic":
+        _refuse_over_budget(claude)
     if not files.has(sha, "original"):
         raise HTTPException(status_code=409, detail="Generate subtitle dulu")
     if not _is_pending(status, sha, target):
@@ -301,9 +331,19 @@ class QuotaEntry(CamelModel):
     updated_at: str
 
 
+class ClaudeSpendInfo(CamelModel):
+    month: str
+    input_tokens: int
+    output_tokens: int
+    # Estimate from this app's own calls, priced with CLAUDE_*_USD_PER_MTOK.
+    usd: float
+    budget_usd: float | None
+
+
 class AiQuota(CamelModel):
     groq_configured: bool
     anthropic_configured: bool
+    claude_spend: ClaudeSpendInfo
     # Last known limits per provider and job, from the headers of the latest call.
     entries: list[QuotaEntry]
 
@@ -315,10 +355,13 @@ def get_quota_store(request: Request) -> QuotaStore:
 
 @router.get("/ai-quota", response_model=AiQuota)
 async def get_ai_quota(
-    store: Annotated[QuotaStore, Depends(get_quota_store)], claude: ClaudeAvailable
+    store: Annotated[QuotaStore, Depends(get_quota_store)],
+    spend: Annotated[ClaudeSpend, Depends(get_claude_spend)],
+    claude: ClaudeAvailable,
 ) -> AiQuota:
     return AiQuota(
         groq_configured=bool(get_settings().groq_api_key.get_secret_value()),
-        anthropic_configured=claude,
+        anthropic_configured=claude.available,
+        claude_spend=ClaudeSpendInfo.model_validate(spend.month()),
         entries=[QuotaEntry.model_validate(entry) for entry in store.all()],
     )

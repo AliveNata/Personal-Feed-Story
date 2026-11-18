@@ -45,6 +45,7 @@ export interface SubtitleAction {
   label: string;
   title: string;
   isWorking: boolean;
+  isDisabled?: boolean;
   onSelect: () => void;
 }
 
@@ -316,11 +317,15 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
           });
         }
         if (info?.claudeAvailable && translator !== 'claude') {
+          const isOverBudget = info.claudeBudgetReached;
           actions.push({
             key: 'claude',
-            label: 'Bikin lebih santai (Claude)',
-            title: 'Terjemahin ulang pakai Claude biar lebih natural, editan kamu tetap',
+            label: isOverBudget ? 'Budget Claude bulan ini habis' : 'Bikin lebih santai (Claude)',
+            title: isOverBudget
+              ? 'Naikin CLAUDE_MONTHLY_BUDGET_USD di backend/.env kalau mau lanjut'
+              : 'Terjemahin ulang pakai Claude biar lebih natural, editan kamu tetap',
             isWorking: false,
+            isDisabled: isOverBudget,
             onSelect: () => redo(target, true),
           });
         }

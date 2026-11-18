@@ -63,6 +63,9 @@ async def client(
     app.state.redis = FakeRedis()
     app.state.queue = FakeQueue()
     app.state.storage = FakeCdnStorage(tmp_path)
+    from app.library.ai_quota import ClaudeSpend
+
+    app.state.claude_spend = ClaudeSpend(fakeredis.FakeRedis(), 0.10, 0.50, 0)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
         yield http_client
@@ -672,7 +675,9 @@ async def test_translation_can_be_redone_with_claude_only_when_its_key_is_set(
 
     # Act
     without_key = await client.post(f"{base}/id/claude")
-    app.dependency_overrides[get_claude_available] = lambda: True
+    from app.library.subtitle_routes import ClaudeState
+
+    app.dependency_overrides[get_claude_available] = lambda: ClaudeState(True, False)
     try:
         redo = await client.post(f"{base}/id/claude")
         status.set(sha, "id", "failed", "Claude error 500")
@@ -706,6 +711,8 @@ async def test_ai_quota_lists_the_last_known_limits(client: httpx.AsyncClient) -
     # Assert
     body = response.json()
     assert body["anthropicConfigured"] is False
+    assert body["claudeSpend"]["usd"] == 0
+    assert body["claudeSpend"]["budgetUsd"] is None
     entry = body["entries"][0]
     assert (entry["provider"], entry["scope"], entry["model"]) == (
         "groq",
@@ -716,3 +723,40 @@ async def test_ai_quota_lists_the_last_known_limits(client: httpx.AsyncClient) -
         {"resource": "requests", "limit": "2000", "remaining": "10", "reset": None}
     ]
     assert entry["updatedAt"]
+
+
+async def test_claude_redo_is_refused_once_the_monthly_budget_is_used(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    # Arrange
+    from app.library.subtitle_routes import ClaudeState, get_claude_available
+    from app.library.subtitles import Line, SubtitleFiles, SubtitleStatus, Transcript
+    from tests.test_subtitles import make_video
+
+    await login(client)
+    files = SubtitleFiles(tmp_path / "subs")
+    app.state.subtitle_files = files
+    app.state.subtitle_status = SubtitleStatus(fakeredis.FakeRedis())
+    folder_id = await _create_folder(client, session_factory)
+    video = make_video(tmp_path / "talk.mp4", seconds=2).read_bytes()
+    item = (
+        await client.post(
+            f"/api/folders/{folder_id}/files", files={"file": ("t.mp4", video, "video/mp4")}
+        )
+    ).json()["item"]
+    base = f"/api/items/{item['id']}/subtitles"
+    await client.post(base)
+    files.save(app.state.queue.jobs[-1], "original", Transcript("en", [Line(0, 1, "hi")]))
+    app.dependency_overrides[get_claude_available] = lambda: ClaudeState(True, True)
+
+    # Act
+    try:
+        refused = await client.post(f"{base}/id/claude")
+        info = await client.get(base)
+    finally:
+        app.dependency_overrides.pop(get_claude_available)
+
+    # Assert
+    assert refused.status_code == 409
+    assert "CLAUDE_MONTHLY_BUDGET_USD" in refused.json()["detail"]
+    assert info.json()["claudeBudgetReached"] is True

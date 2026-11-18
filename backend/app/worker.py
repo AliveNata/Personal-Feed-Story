@@ -26,6 +26,7 @@ from app.library.subtitles import (
     SubtitleStatus,
     TranslationTarget,
     build_claude,
+    build_claude_spend,
     build_translator,
     run_transcription,
     run_translation,
@@ -69,9 +70,10 @@ async def startup(ctx: dict[str, Any]) -> None:
         settings.groq_base_url,
         quota,
     )
-    ctx["translator"] = build_translator(settings, http_client, quota)
+    spend = build_claude_spend(settings, redis)
+    ctx["translator"] = build_translator(settings, http_client, quota, spend)
     # Asked for per video, to make a Groq translation more natural.
-    ctx["claude"] = build_claude(settings, http_client, quota)
+    ctx["claude"] = build_claude(settings, http_client, quota, spend)
     ctx["http_client"] = http_client
     ctx["runner"] = JobRunner(
         build_session_factory(engine),

@@ -4,7 +4,7 @@ import fakeredis
 import httpx
 import respx
 
-from app.library.ai_quota import QuotaStore, parse_limits
+from app.library.ai_quota import ClaudeSpend, QuotaStore, parse_limits
 from app.library.subtitles import ClaudeTranslator, GroqTranscriber
 
 GROQ_HEADERS = {
@@ -110,3 +110,51 @@ async def test_empty_anthropic_balance_says_so() -> None:
         # Act / Assert
         with pytest.raises(SubtitleError, match="Saldo kredit Anthropic habis"):
             await claude.translate(["hi"], "id")
+
+
+def test_claude_spend_is_priced_per_million_tokens_and_checked_against_the_budget() -> None:
+    # Arrange
+    spend = ClaudeSpend(fakeredis.FakeRedis(), 0.10, 0.50, 0.002)
+
+    # Act
+    spend.record(10_000, 1_000)
+    under = spend.is_over_budget()
+    spend.record(5_000, 1_000)
+    over = spend.is_over_budget()
+
+    # Assert
+    month = spend.month()
+    assert (month["input_tokens"], month["output_tokens"]) == (15_000, 2_000)
+    assert month["usd"] == 0.0025
+    assert (under, over) == (False, True)
+
+
+@respx.mock
+async def test_claude_records_its_usage_and_stops_at_the_budget() -> None:
+    # Arrange
+    import pytest
+
+    from app.library.subtitles import SubtitleError
+
+    spend = ClaudeSpend(fakeredis.FakeRedis(), 0.10, 0.50, 0.0001)
+    reply = {
+        "content": [{"type": "text", "text": '{"1": "halo"}'}],
+        "usage": {"input_tokens": 400, "output_tokens": 100},
+    }
+    route = respx.post("https://claude.test/v1/messages").mock(
+        return_value=httpx.Response(200, json=reply)
+    )
+    async with httpx.AsyncClient() as client:
+        claude = ClaudeTranslator(
+            client, "sk", "claude-haiku-5-5", "https://claude.test", None, spend
+        )
+
+        # Act
+        first = await claude.translate(["hi"], "id")
+        with pytest.raises(SubtitleError, match="Budget Claude"):
+            await claude.translate(["hi"], "id")
+
+    # Assert
+    assert first == {0: "halo"}
+    assert route.call_count == 1
+    assert spend.month()["input_tokens"] == 400

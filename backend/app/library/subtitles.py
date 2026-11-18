@@ -22,7 +22,7 @@ import httpx
 from redis import Redis
 from redis.exceptions import RedisError
 
-from app.library.ai_quota import QuotaStore
+from app.library.ai_quota import BudgetExceeded, ClaudeSpend, QuotaStore
 
 if TYPE_CHECKING:
     from app.config import Settings
@@ -481,8 +481,10 @@ class ClaudeTranslator:
         model: str,
         base_url: str,
         quota: QuotaStore | None = None,
+        spend: ClaudeSpend | None = None,
     ) -> None:
         self._quota = quota
+        self._spend = spend
         self._client = client
         self._api_key = api_key
         self._model = model
@@ -495,6 +497,11 @@ class ClaudeTranslator:
     async def translate(self, texts: list[str], target: TranslationTarget) -> dict[int, str]:
         if not self._api_key:
             raise SubtitleError("ANTHROPIC_API_KEY belum diisi di backend/.env")
+        if self._spend is not None:
+            try:
+                self._spend.check()
+            except BudgetExceeded as exc:
+                raise SubtitleError(str(exc)) from exc
         prompt = translation_prompt(texts, target)
         response = await self._client.post(
             self._url,
@@ -520,6 +527,11 @@ class ClaudeTranslator:
                 raise SubtitleError("Saldo kredit Anthropic habis, top up di console")
             raise SubtitleError(f"Claude error {response.status_code}: {message}")
         body = response.json()
+        usage = body.get("usage") or {}
+        if self._spend is not None:
+            self._spend.record(
+                int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0))
+            )
         text = "".join(
             block.get("text", "")
             for block in body.get("content", [])
@@ -528,8 +540,20 @@ class ClaudeTranslator:
         return _parse_numbered(text, len(texts))
 
 
+def build_claude_spend(settings: "Settings", redis: Redis) -> ClaudeSpend:
+    return ClaudeSpend(
+        redis,
+        settings.claude_input_usd_per_mtok,
+        settings.claude_output_usd_per_mtok,
+        settings.claude_monthly_budget_usd,
+    )
+
+
 def build_claude(
-    settings: "Settings", client: httpx.AsyncClient, quota: QuotaStore | None = None
+    settings: "Settings",
+    client: httpx.AsyncClient,
+    quota: QuotaStore | None = None,
+    spend: ClaudeSpend | None = None,
 ) -> "ClaudeTranslator":
     return ClaudeTranslator(
         client,
@@ -537,14 +561,18 @@ def build_claude(
         settings.claude_translate_model,
         settings.anthropic_base_url,
         quota,
+        spend,
     )
 
 
 def build_translator(
-    settings: "Settings", client: httpx.AsyncClient, quota: QuotaStore | None = None
+    settings: "Settings",
+    client: httpx.AsyncClient,
+    quota: QuotaStore | None = None,
+    spend: ClaudeSpend | None = None,
 ) -> Translator:
     if settings.subtitle_translator == "anthropic":
-        return build_claude(settings, client, quota)
+        return build_claude(settings, client, quota, spend)
     return GroqTranslator(
         client,
         settings.groq_api_key.get_secret_value(),

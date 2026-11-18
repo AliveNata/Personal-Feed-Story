@@ -224,6 +224,8 @@ export interface SubtitleInfo {
   tracks: SubtitleTrackState[];
   // ANTHROPIC_API_KEY is set on the backend.
   claudeAvailable: boolean;
+  // This month's Claude estimate reached CLAUDE_MONTHLY_BUDGET_USD.
+  claudeBudgetReached: boolean;
 }
 
 export interface SubtitleLine {
@@ -255,9 +257,19 @@ export interface AiQuotaEntry {
   updatedAt: string;
 }
 
+export interface ClaudeSpend {
+  month: string;
+  inputTokens: number;
+  outputTokens: number;
+  // Estimate from this app's own calls.
+  usd: number;
+  budgetUsd: number | null;
+}
+
 export interface AiQuota {
   groqConfigured: boolean;
   anthropicConfigured: boolean;
+  claudeSpend: ClaudeSpend;
   // Last known limits, from the latest call per provider and job.
   entries: AiQuotaEntry[];
 }

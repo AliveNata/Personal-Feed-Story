@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr = SecretStr("")
     anthropic_base_url: str = "https://api.anthropic.com"
     claude_translate_model: str = "claude-haiku-5-5"
+    # USD per million tokens for the spend estimate, Haiku 5.5 for prompts under 100K tokens.
+    claude_input_usd_per_mtok: float = Field(default=0.10, ge=0)
+    claude_output_usd_per_mtok: float = Field(default=0.50, ge=0)
+    # Claude jobs stop once this month's estimate reaches it. 0 means no budget, only the estimate.
+    claude_monthly_budget_usd: float = Field(default=0.0, ge=0)
     # Audio is sent in pieces this long: well under Groq's 25 MB cap, and small enough that the
     # progress bar moves on a short video too.
     subtitle_chunk_seconds: int = Field(default=300, ge=60, le=3600)
