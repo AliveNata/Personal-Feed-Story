@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_db, require_user
+from app.config import get_settings
 from app.db import MediaItem
 from app.library.routes import get_queue, get_storage
 from app.library.storage import LibraryStorage
@@ -45,12 +46,16 @@ class TrackState(CamelModel):
     error: str | None = None
     # 0 to 99 while running, None before the worker picks the job up.
     progress: int | None = None
+    # "groq" or "claude" for a saved translation, so the menu knows whether Claude can redo it.
+    translator: str | None = None
 
 
 class SubtitleInfo(CamelModel):
     # ISO 639-1 code of the spoken language, known once the original track is ready.
     language: str | None
     tracks: list[TrackState]
+    # ANTHROPIC_API_KEY is set: a Groq translation can be made more natural with Claude.
+    claude_available: bool
 
 
 class SubtitleLine(CamelModel):
@@ -74,32 +79,50 @@ async def _video(db: AsyncSession, item_id: int) -> MediaItem:
     return item
 
 
-def _info(sha256: str, files: SubtitleFiles, status: SubtitleStatus) -> SubtitleInfo:
+def _info(
+    sha256: str, files: SubtitleFiles, status: SubtitleStatus, claude_available: bool
+) -> SubtitleInfo:
     tracks: list[TrackState] = []
     for track in TRACKS:
-        if files.has(sha256, track):
-            tracks.append(TrackState(track=track, state="ready"))
-            continue
-        raw = status.get(sha256, track)
-        if raw is None:
-            tracks.append(TrackState(track=track, state="none"))
-        else:
-            tracks.append(
-                TrackState(
-                    track=track,
-                    state=raw["state"],
-                    error=raw.get("error"),
-                    progress=raw.get("progress"),
-                )
+        raw = status.get(sha256, track) or {}
+        saved = files.load(sha256, track) if files.has(sha256, track) else None
+        state = raw.get("state")
+        # A translation being redone with Claude shows its progress over the saved file, a
+        # failed redo leaves that file usable with the error beside it. The original is never
+        # redone, so its file always wins.
+        is_redoing = track != "original" and state in ("queued", "running")
+        if saved is not None and not is_redoing:
+            state = "ready"
+        tracks.append(
+            TrackState(
+                track=track,
+                state=state or "none",
+                error=raw.get("error"),
+                progress=raw.get("progress"),
+                translator=saved.translator if saved else None,
             )
+        )
     original = files.load(sha256, "original")
-    return SubtitleInfo(language=original.language if original else None, tracks=tracks)
+    return SubtitleInfo(
+        language=original.language if original else None,
+        tracks=tracks,
+        claude_available=claude_available,
+    )
+
+
+def get_claude_available() -> bool:
+    return bool(get_settings().anthropic_api_key.get_secret_value())
+
+
+ClaudeAvailable = Annotated[bool, Depends(get_claude_available)]
 
 
 @router.get("/items/{item_id}/subtitles", response_model=SubtitleInfo)
-async def get_subtitles(item_id: int, db: DbSession, files: Files, status: Status) -> SubtitleInfo:
+async def get_subtitles(
+    item_id: int, db: DbSession, files: Files, status: Status, claude: ClaudeAvailable
+) -> SubtitleInfo:
     item = await _video(db, item_id)
-    return _info(item.blob_sha256, files, status)
+    return _info(item.blob_sha256, files, status, claude)
 
 
 def _is_pending(status: SubtitleStatus, sha256: str, track: Track) -> bool:
@@ -109,7 +132,13 @@ def _is_pending(status: SubtitleStatus, sha256: str, track: Track) -> bool:
 
 @router.post("/items/{item_id}/subtitles", response_model=SubtitleInfo, status_code=202)
 async def generate_subtitles(
-    item_id: int, db: DbSession, files: Files, status: Status, queue: Queue, storage: Storage
+    item_id: int,
+    db: DbSession,
+    files: Files,
+    status: Status,
+    queue: Queue,
+    storage: Storage,
+    claude: ClaudeAvailable,
 ) -> SubtitleInfo:
     item = await _video(db, item_id)
     sha = item.blob_sha256
@@ -121,7 +150,7 @@ async def generate_subtitles(
         await queue.enqueue_job(
             "transcribe_subtitles", sha, str(video), _job_id=f"subtitle-{sha}-original"
         )
-    return _info(sha, files, status)
+    return _info(sha, files, status, claude)
 
 
 @router.post("/items/{item_id}/subtitles/{target}", response_model=SubtitleInfo, status_code=202)
@@ -132,6 +161,7 @@ async def translate_subtitles(
     files: Files,
     status: Status,
     queue: Queue,
+    claude: ClaudeAvailable,
 ) -> SubtitleInfo:
     item = await _video(db, item_id)
     sha = item.blob_sha256
@@ -142,7 +172,34 @@ async def translate_subtitles(
         await queue.enqueue_job(
             "translate_subtitles", sha, target, _job_id=f"subtitle-{sha}-{target}"
         )
-    return _info(sha, files, status)
+    return _info(sha, files, status, claude)
+
+
+@router.post(
+    "/items/{item_id}/subtitles/{target}/claude", response_model=SubtitleInfo, status_code=202
+)
+async def retranslate_with_claude(
+    item_id: int,
+    target: TranslationTarget,
+    db: DbSession,
+    files: Files,
+    status: Status,
+    queue: Queue,
+    claude: ClaudeAvailable,
+) -> SubtitleInfo:
+    """Translate again with Claude for more natural lines, replacing the earlier translation."""
+    item = await _video(db, item_id)
+    sha = item.blob_sha256
+    if not claude:
+        raise HTTPException(status_code=400, detail="ANTHROPIC_API_KEY belum diisi di backend/.env")
+    if not files.has(sha, "original"):
+        raise HTTPException(status_code=409, detail="Generate subtitle dulu")
+    if not _is_pending(status, sha, target):
+        status.set(sha, target, "queued")
+        await queue.enqueue_job(
+            "translate_subtitles", sha, target, True, _job_id=f"subtitle-{sha}-{target}-claude"
+        )
+    return _info(sha, files, status, claude)
 
 
 @router.get("/items/{item_id}/subtitles/{track}", response_model=SubtitleTrack)

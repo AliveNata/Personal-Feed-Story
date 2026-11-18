@@ -351,6 +351,12 @@ export const generateSubtitles = (itemId: number): Promise<SubtitleInfo> =>
 export const translateSubtitles = (itemId: number, target: SubtitleTarget): Promise<SubtitleInfo> =>
   request<SubtitleInfo>(`/api/items/${itemId}/subtitles/${target}`, { method: 'POST' });
 
+export const retranslateWithClaude = (
+  itemId: number,
+  target: SubtitleTarget,
+): Promise<SubtitleInfo> =>
+  request<SubtitleInfo>(`/api/items/${itemId}/subtitles/${target}/claude`, { method: 'POST' });
+
 export const fetchSubtitleTrack = (
   itemId: number,
   track: SubtitleTrackName,

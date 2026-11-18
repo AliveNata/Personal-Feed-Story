@@ -10,6 +10,7 @@ import {
   fetchSubtitleInfo,
   fetchSubtitleTrack,
   generateSubtitles,
+  retranslateWithClaude,
   translateSubtitles,
 } from '../utils/api';
 import { SubtitleChoice, readSubtitleChoice, saveSubtitleChoice } from '../utils/viewerPrefs';
@@ -31,6 +32,14 @@ export interface SubtitleOption {
   label: string;
   state: SubtitleState;
   progress: number | null;
+  // A saved translation being made again with Claude.
+  isRedoing: boolean;
+}
+
+export interface ClaudeRedo {
+  isWorking: boolean;
+  progress: number | null;
+  onRedo: () => void;
 }
 
 export interface SubtitleControls {
@@ -38,6 +47,8 @@ export interface SubtitleControls {
   choice: SubtitleChoice;
   onChoose: (choice: SubtitleChoice) => void;
   lines: SubtitleLine[] | null;
+  // Offered for a Groq translation while ANTHROPIC_API_KEY is set, null otherwise.
+  claude: ClaudeRedo | null;
 }
 
 const isBusy = (state: SubtitleState | undefined): boolean =>
@@ -52,7 +63,10 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
   const [info, setInfo] = useState<SubtitleInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [choice, setChoice] = useState<SubtitleChoice>(readSubtitleChoice);
-  const [tracks, setTracks] = useState<Partial<Record<SubtitleTrackName, SubtitleLine[]>>>({});
+  // Kept with who made them: a translation redone by Claude is fetched again.
+  const [tracks, setTracks] = useState<
+    Partial<Record<SubtitleTrackName, { translator: string | null; lines: SubtitleLine[] }>>
+  >({});
   const requested = useRef(new Set<SubtitleTarget>());
 
   useEffect(() => {
@@ -73,6 +87,11 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
   const progressOf = useCallback(
     (track: SubtitleTrackName): number | null =>
       info?.tracks.find((entry) => entry.track === track)?.progress ?? null,
+    [info],
+  );
+  const translatorOf = useCallback(
+    (track: SubtitleTrackName): string | null =>
+      info?.tracks.find((entry) => entry.track === track)?.translator ?? null,
     [info],
   );
   const stateOf = useCallback(
@@ -124,16 +143,42 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
   }, [shownTrack, stateOf, requestTranslation]);
 
   const shownState = shownTrack ? stateOf(shownTrack) : 'none';
+  const shownTranslator = shownTrack ? translatorOf(shownTrack) : null;
+  const cached = shownTrack ? tracks[shownTrack] : undefined;
+  const needsFetch =
+    shownTrack !== null &&
+    shownState === 'ready' &&
+    (cached === undefined || cached.translator !== shownTranslator);
   useEffect(() => {
-    if (shownTrack === null || shownState !== 'ready' || tracks[shownTrack]) return;
+    if (!needsFetch || shownTrack === null) return;
     let isCurrent = true;
     fetchSubtitleTrack(itemId, shownTrack)
-      .then((track) => isCurrent && setTracks((previous) => ({ ...previous, [shownTrack]: track.lines })))
+      .then(
+        (track) =>
+          isCurrent &&
+          setTracks((previous) => ({
+            ...previous,
+            [shownTrack]: { translator: shownTranslator, lines: track.lines },
+          })),
+      )
       .catch((caught: unknown) => console.error('fetchSubtitleTrack failed', caught));
     return () => {
       isCurrent = false;
     };
-  }, [itemId, shownTrack, shownState, tracks]);
+  }, [itemId, shownTrack, shownTranslator, needsFetch]);
+
+  const redoWithClaude = useCallback(
+    (target: SubtitleTarget) => {
+      setError(null);
+      retranslateWithClaude(itemId, target)
+        .then(setInfo)
+        .catch((caught: unknown) => {
+          console.error('retranslateWithClaude failed', caught);
+          setError(caught instanceof Error ? caught.message : 'Gagal minta Claude');
+        });
+    },
+    [itemId],
+  );
 
   const generate = useCallback(() => {
     setError(null);
@@ -162,12 +207,13 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
   const controls = useMemo((): SubtitleControls | null => {
     if (originalState !== 'ready') return null;
     const options: SubtitleOption[] = [
-      { choice: 'off', label: 'Mati', state: 'ready', progress: null },
+      { choice: 'off', label: 'Mati', state: 'ready', progress: null, isRedoing: false },
       {
         choice: 'original',
         label: `Asli (${languageName(language)})`,
         state: 'ready',
         progress: null,
+        isRedoing: false,
       },
     ];
     const translations: [SubtitleTarget, string][] = [
@@ -176,17 +222,47 @@ export const useSubtitles = (itemId: number, isVideo: boolean) => {
     ];
     for (const [target, label] of translations) {
       if (language !== target) {
-        options.push({ choice: target, label, state: stateOf(target), progress: progressOf(target) });
+        const state = stateOf(target);
+        options.push({
+          choice: target,
+          label,
+          state,
+          progress: progressOf(target),
+          isRedoing: isBusy(state) && translatorOf(target) !== null,
+        });
       }
     }
     const shownChoice: SubtitleChoice = choice === language ? 'original' : choice;
+    let claude: ClaudeRedo | null = null;
+    if (info?.claudeAvailable && (shownTrack === 'en' || shownTrack === 'id')) {
+      const target = shownTrack;
+      const state = stateOf(target);
+      const translator = translatorOf(target);
+      const isWorking = isBusy(state) && translator !== null;
+      if (isWorking || (state === 'ready' && translator !== 'claude')) {
+        claude = { isWorking, progress: progressOf(target), onRedo: () => redoWithClaude(target) };
+      }
+    }
     return {
       options,
       choice: shownChoice,
       onChoose: choose,
-      lines: shownTrack ? (tracks[shownTrack] ?? null) : null,
+      lines: shownTrack ? (tracks[shownTrack]?.lines ?? null) : null,
+      claude,
     };
-  }, [originalState, language, stateOf, progressOf, choice, choose, shownTrack, tracks]);
+  }, [
+    originalState,
+    language,
+    stateOf,
+    progressOf,
+    translatorOf,
+    choice,
+    choose,
+    shownTrack,
+    tracks,
+    info,
+    redoWithClaude,
+  ]);
 
   const originalError = info?.tracks.find((entry) => entry.track === 'original')?.error ?? null;
   const shownError = shownTrack

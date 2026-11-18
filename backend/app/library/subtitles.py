@@ -68,6 +68,8 @@ class Line:
 class Transcript:
     language: str | None
     lines: list[Line]
+    # Who translated it: "groq" or "claude". None for the original and for older files.
+    translator: str | None = None
 
 
 def normalize_language(raw: str | None) -> str | None:
@@ -92,7 +94,11 @@ class SubtitleFiles:
     def save(self, sha256: str, track: Track, transcript: Transcript) -> None:
         target = self.path(sha256, track)
         target.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"language": transcript.language, "lines": [asdict(x) for x in transcript.lines]}
+        payload = {
+            "language": transcript.language,
+            "translator": transcript.translator,
+            "lines": [asdict(x) for x in transcript.lines],
+        }
         # Written beside and renamed, so a reader never sees half a file.
         partial = target.with_suffix(".part")
         partial.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -103,7 +109,8 @@ class SubtitleFiles:
         if not path.exists():
             return None
         raw = json.loads(path.read_text(encoding="utf-8"))
-        return Transcript(raw.get("language"), [Line(**line) for line in raw["lines"]])
+        lines = [Line(**line) for line in raw["lines"]]
+        return Transcript(raw.get("language"), lines, raw.get("translator"))
 
     def delete_all(self, sha256: str) -> None:
         shutil.rmtree(self.root / sha256, ignore_errors=True)
@@ -326,6 +333,8 @@ async def transcribe_video(
 
 
 class Translator(Protocol):
+    name: str
+
     async def translate(self, texts: list[str], target: TranslationTarget) -> list[str]: ...
 
 
@@ -340,6 +349,8 @@ def translation_prompt(texts: list[str], target: TranslationTarget) -> str:
 
 class GroqTranslator:
     """A text model on Groq, the same key and free tier as the transcription."""
+
+    name = "groq"
 
     def __init__(self, client: httpx.AsyncClient, api_key: str, model: str, base_url: str) -> None:
         self._client = client
@@ -380,6 +391,8 @@ class GroqTranslator:
 
 
 class ClaudeTranslator:
+    name = "claude"
+
     def __init__(self, client: httpx.AsyncClient, api_key: str, model: str, base_url: str) -> None:
         self._client = client
         self._api_key = api_key
@@ -475,7 +488,7 @@ async def translate_transcript(
         Line(line.start, line.end, text or line.text)
         for line, text in zip(transcript.lines, translated, strict=True)
     ]
-    return Transcript(target, lines)
+    return Transcript(target, lines, translator.name)
 
 
 # Jobs
@@ -526,6 +539,7 @@ async def run_translation(
         original = files.load(sha256, "original")
         if original is None:
             raise SubtitleError("Subtitle asli belum ada, generate dulu")
+        # A translation made again (with Claude) replaces the old file only once it is done.
         translated = await translate_transcript(original, target, translator, report)
         files.save(sha256, target, translated)
     except SubtitleError as exc:

@@ -632,3 +632,49 @@ async def test_subtitles_generate_once_then_translate_and_serve_lines(
     assert lines.json()["lines"] == [{"start": 0.0, "end": 1.5, "text": "halo semua"}]
     assert missing.status_code == 404
     assert on_photo.status_code == 400
+
+
+async def test_translation_can_be_redone_with_claude_only_when_its_key_is_set(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    # Arrange
+    from app.library.subtitle_routes import get_claude_available
+    from app.library.subtitles import Line, SubtitleFiles, SubtitleStatus, Transcript
+    from tests.test_subtitles import make_video
+
+    await login(client)
+    files = SubtitleFiles(tmp_path / "subs")
+    status = SubtitleStatus(fakeredis.FakeRedis())
+    app.state.subtitle_files = files
+    app.state.subtitle_status = status
+    folder_id = await _create_folder(client, session_factory)
+    video = make_video(tmp_path / "talk.mp4", seconds=2).read_bytes()
+    item = (
+        await client.post(
+            f"/api/folders/{folder_id}/files", files={"file": ("t.mp4", video, "video/mp4")}
+        )
+    ).json()["item"]
+    base = f"/api/items/{item['id']}/subtitles"
+    await client.post(base)
+    sha = app.state.queue.jobs[-1]
+    files.save(sha, "original", Transcript("en", [Line(0, 1, "hi")]))
+    files.save(sha, "id", Transcript("id", [Line(0, 1, "hai")], "groq"))
+
+    # Act
+    without_key = await client.post(f"{base}/id/claude")
+    app.dependency_overrides[get_claude_available] = lambda: True
+    try:
+        redo = await client.post(f"{base}/id/claude")
+        status.set(sha, "id", "failed", "Claude error 500")
+        after_failure = await client.get(base)
+    finally:
+        app.dependency_overrides.pop(get_claude_available)
+
+    # Assert
+    assert without_key.status_code == 400
+    assert redo.status_code == 202
+    assert redo.json()["claudeAvailable"] is True
+    redo_id = next(t for t in redo.json()["tracks"] if t["track"] == "id")
+    assert (redo_id["state"], redo_id["translator"]) == ("queued", "groq")
+    failed_id = next(t for t in after_failure.json()["tracks"] if t["track"] == "id")
+    assert (failed_id["state"], failed_id["error"]) == ("ready", "Claude error 500")

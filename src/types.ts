@@ -214,12 +214,16 @@ export interface SubtitleTrackState {
   error: string | null;
   // 0 to 99 while running, null while it waits in the queue.
   progress: number | null;
+  // Who made a saved translation, so the menu knows whether Claude can redo it.
+  translator: 'groq' | 'claude' | null;
 }
 
 export interface SubtitleInfo {
   // ISO 639-1 code of the spoken language, known once the original track is ready.
   language: string | null;
   tracks: SubtitleTrackState[];
+  // ANTHROPIC_API_KEY is set on the backend.
+  claudeAvailable: boolean;
 }
 
 export interface SubtitleLine {

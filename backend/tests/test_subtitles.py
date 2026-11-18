@@ -54,6 +54,8 @@ class FakeTranscriber:
 
 
 class FakeTranslator:
+    name = "fake"
+
     def __init__(self, broken_batches: set[int] | None = None) -> None:
         self.batches = 0
         self.broken = broken_batches or set()
@@ -347,3 +349,4 @@ async def test_translation_job_needs_the_original_first(tmp_path: Path) -> None:
     assert first is not None and first["state"] == "failed"
     translated = files.load("abc", "en")
     assert translated is not None and translated.lines[0].text == "[en] halo"
+    assert translated.translator == "fake"

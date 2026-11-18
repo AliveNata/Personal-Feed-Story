@@ -20,6 +20,7 @@ from app.library.archive import ImportStore, run_import
 from app.library.jobs import JobRunner
 from app.library.progress import RedisProgress
 from app.library.subtitles import (
+    ClaudeTranslator,
     GroqTranscriber,
     SubtitleFiles,
     SubtitleStatus,
@@ -66,6 +67,13 @@ async def startup(ctx: dict[str, Any]) -> None:
         settings.groq_base_url,
     )
     ctx["translator"] = build_translator(settings, http_client)
+    # Asked for per video, to make a Groq translation more natural.
+    ctx["claude"] = ClaudeTranslator(
+        http_client,
+        settings.anthropic_api_key.get_secret_value(),
+        settings.claude_translate_model,
+        settings.anthropic_base_url,
+    )
     ctx["http_client"] = http_client
     ctx["runner"] = JobRunner(
         build_session_factory(engine),
@@ -148,10 +156,11 @@ async def transcribe_subtitles(ctx: dict[str, Any], sha256: str, video_path: str
     )
 
 
-async def translate_subtitles(ctx: dict[str, Any], sha256: str, target: TranslationTarget) -> None:
-    await run_translation(
-        sha256, target, ctx["subtitle_files"], ctx["subtitle_status"], ctx["translator"]
-    )
+async def translate_subtitles(
+    ctx: dict[str, Any], sha256: str, target: TranslationTarget, use_claude: bool = False
+) -> None:
+    translator = ctx["claude"] if use_claude else ctx["translator"]
+    await run_translation(sha256, target, ctx["subtitle_files"], ctx["subtitle_status"], translator)
 
 
 class WorkerSettings:

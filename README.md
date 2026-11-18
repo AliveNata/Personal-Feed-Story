@@ -180,7 +180,9 @@ In the viewer, a video gets a subtitle button in the top toolbar. It sends the a
 (Whisper Large v3), which writes timed lines in the spoken language. Once that is done, the CC
 button in the video controls switches between off, the original language, English and Indonesia.
 A translation is made the first time it is picked, by a text model on Groq (same key, free tier).
-Set `SUBTITLE_TRANSLATOR=anthropic` plus `ANTHROPIC_API_KEY` to translate with Claude instead. The subtitle button shows
+With `ANTHROPIC_API_KEY` set, the CC menu also offers "Bikin lebih santai (Claude)" for the
+language on screen: Claude translates that video again from the original, and its version replaces
+the Groq one. Set `SUBTITLE_TRANSLATOR=anthropic` to translate everything with Claude from the start. The subtitle button shows
 the progress in percent, and the CC menu shows it for a translation. Results are saved on the
 server per file (`data/library/subtitles/`), so each video is transcribed and translated once, and
 they are deleted together with the video.
@@ -255,6 +257,7 @@ Login required:
 | `GET /api/items/{id}/subtitles` | Spoken language and the state of each track (`original`, `en`, `id`) |
 | `POST /api/items/{id}/subtitles` | Queues the transcription (once per file) |
 | `POST /api/items/{id}/subtitles/{en\|id}` | Queues a translation of the original track |
+| `POST /api/items/{id}/subtitles/{en\|id}/claude` | Translates again with Claude, replacing the saved translation |
 | `GET /api/items/{id}/subtitles/{track}` | Timed lines of a finished track |
 
 Errors come back as `{"detail": "..."}`:

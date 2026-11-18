@@ -1,5 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Captions, Check, Loader2, Maximize, Minimize, Pause, Play, Volume2, VolumeX } from 'lucide-react';
+import {
+  Captions,
+  Check,
+  Loader2,
+  Maximize,
+  Minimize,
+  Pause,
+  Play,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import { Rotation } from '../types';
 import { SubtitleControls } from './useSubtitles';
 
@@ -424,7 +434,7 @@ const VideoControls: React.FC<VideoControlsProps> = ({
                     const note = isWorking
                       ? option.progress === null
                         ? 'nunggu antrean'
-                        : `lagi diterjemahin ${option.progress}%`
+                        : `lagi ${option.isRedoing ? 'disantaiin' : 'diterjemahin'} ${option.progress}%`
                       : option.state === 'failed'
                         ? 'gagal, klik lagi'
                         : null;
@@ -453,6 +463,33 @@ const VideoControls: React.FC<VideoControlsProps> = ({
                       </button>
                     );
                   })}
+                  {subtitles.claude && (
+                    <>
+                      <div role="separator" className="my-1 border-t border-white/15" />
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={subtitles.claude.isWorking}
+                        onClick={() => {
+                          subtitles.claude?.onRedo();
+                          setIsMenuOpen(false);
+                        }}
+                        title="Terjemahin ulang pakai Claude biar bahasanya lebih natural. Hasilnya gantiin terjemahan sekarang."
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-white hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none disabled:text-white/60 disabled:hover:bg-transparent"
+                      >
+                        {subtitles.claude.isWorking ? (
+                          <Loader2 className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                        ) : (
+                          <span className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        )}
+                        <span>
+                          {subtitles.claude.isWorking
+                            ? `Claude lagi nyantaiin${subtitles.claude.progress === null ? '…' : ` ${subtitles.claude.progress}%`}`
+                            : 'Bikin lebih santai (Claude)'}
+                        </span>
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>
