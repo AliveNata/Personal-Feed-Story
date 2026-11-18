@@ -244,6 +244,9 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
   });
 
   const navButton = `flex h-11 w-11 items-center justify-center rounded-full bg-white/90 text-gray-900 disabled:opacity-30 ${focusRing}`;
+  // Prev and next sit on the media itself: a bare white chevron with a shadow stays readable on
+  // light and dark pictures without a disc covering the photo.
+  const arrowButton = `flex h-12 w-12 items-center justify-center rounded-full text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)] hover:bg-black/25 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white`;
 
   return (
     <dialog
@@ -399,18 +402,18 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
             onClick={onPrevious}
             disabled={!onPrevious}
             aria-label="Sebelumnya"
-            className={`absolute left-2 top-1/2 -translate-y-1/2 ${navButton}`}
+            className={`absolute left-2 top-1/2 -translate-y-1/2 ${arrowButton}`}
           >
-            <ChevronLeft className="h-6 w-6" aria-hidden="true" />
+            <ChevronLeft className="h-9 w-9" aria-hidden="true" />
           </button>
           <button
             type="button"
             onClick={onNext}
             disabled={!onNext}
             aria-label="Berikutnya"
-            className={`absolute right-2 top-1/2 -translate-y-1/2 ${navButton}`}
+            className={`absolute right-2 top-1/2 -translate-y-1/2 ${arrowButton}`}
           >
-            <ChevronRight className="h-6 w-6" aria-hidden="true" />
+            <ChevronRight className="h-9 w-9" aria-hidden="true" />
           </button>
         </div>
 
