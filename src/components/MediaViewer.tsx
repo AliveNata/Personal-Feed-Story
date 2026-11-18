@@ -177,16 +177,32 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
   };
 
   useEffect(() => {
-    const sync = () => setIsFullscreen(document.fullscreenElement === stageRef.current);
+    const sync = () => {
+      const isStageFullscreen = document.fullscreenElement === stageRef.current;
+      setIsFullscreen(isStageFullscreen);
+      // Back on a phone leaves fullscreen without our button, so release the lock here too.
+      if (!isStageFullscreen) unlockOrientation();
+    };
     document.addEventListener('fullscreenchange', sync);
     return () => document.removeEventListener('fullscreenchange', sync);
   }, []);
 
   const toggleFullscreen = () => {
-    const request = document.fullscreenElement
-      ? document.exitFullscreen()
-      : stageRef.current?.requestFullscreen();
-    request?.catch((error: unknown) => console.error('fullscreen toggle failed', error));
+    if (document.fullscreenElement) {
+      document
+        .exitFullscreen()
+        .catch((error: unknown) => console.error('exit fullscreen failed', error));
+      return;
+    }
+    const stage = stageRef.current;
+    if (!stage) return;
+    stage
+      .requestFullscreen()
+      .then(() => {
+        const video = stage.querySelector('video');
+        if (video && isLandscapeVideo(video, item.rotation)) lockLandscape();
+      })
+      .catch((error: unknown) => console.error('enter fullscreen failed', error));
   };
 
   // Native <dialog>: showModal gives focus trapping, Escape to close and an inert background.
@@ -491,3 +507,31 @@ const MediaViewer: React.FC<MediaViewerProps> = ({
 };
 
 export default MediaViewer;
+
+type LockableOrientation = ScreenOrientation & {
+  lock?: (orientation: 'landscape') => Promise<void>;
+};
+
+function isLandscapeVideo(video: HTMLVideoElement, rotation: Rotation): boolean {
+  const isSideways = rotation === 90 || rotation === 270;
+  const width = isSideways ? video.videoHeight : video.videoWidth;
+  const height = isSideways ? video.videoWidth : video.videoHeight;
+  return width > height;
+}
+
+// Phones do not turn a fullscreen element sideways on their own, the native player does it with
+// this lock. Desktop browsers and Android split screen or popup windows reject it, which is fine.
+function lockLandscape(): void {
+  const orientation = screen.orientation as LockableOrientation | undefined;
+  orientation?.lock?.('landscape').catch((error: unknown) => {
+    console.info('orientation lock not available here', error);
+  });
+}
+
+function unlockOrientation(): void {
+  try {
+    screen.orientation?.unlock();
+  } catch (error) {
+    console.info('orientation unlock not available here', error);
+  }
+}
