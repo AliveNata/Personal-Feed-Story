@@ -20,6 +20,7 @@ from app.library.subtitles import (
     Track,
     Transcript,
     TranslationTarget,
+    tighten_starts,
 )
 from app.models import CamelModel
 
@@ -91,11 +92,22 @@ class LineEdit(CamelModel):
         return clean
 
 
-def _track_response(track: Track, transcript: Transcript) -> SubtitleTrack:
+def _track_response(
+    track: Track, transcript: Transcript, original: Transcript | None
+) -> SubtitleTrack:
+    starts = [line.start for line in transcript.lines]
+    # Older files have starts that often sit on the end of the line before. Translations share
+    # the original's timing, so the original's text length decides how far to pull them in.
+    is_old_timing = original is not None and not original.word_timing
+    if original is not None and is_old_timing and len(original.lines) == len(transcript.lines):
+        starts = tighten_starts(original.lines)
     return SubtitleTrack(
         track=track,
         language=transcript.language,
-        lines=[SubtitleLine(start=x.start, end=x.end, text=x.text) for x in transcript.lines],
+        lines=[
+            SubtitleLine(start=start, end=x.end, text=x.text)
+            for start, x in zip(starts, transcript.lines, strict=True)
+        ],
         edited=sorted(transcript.edited),
     )
 
@@ -301,7 +313,7 @@ async def get_subtitle_track(
     transcript = files.load(item.blob_sha256, track)
     if transcript is None:
         raise HTTPException(status_code=404, detail="Subtitle ini belum ada")
-    return _track_response(track, transcript)
+    return _track_response(track, transcript, files.load(item.blob_sha256, "original"))
 
 
 @router.put("/items/{item_id}/subtitles/{track}/lines/{index}", response_model=SubtitleTrack)
@@ -313,7 +325,7 @@ async def edit_subtitle_line(
         transcript = files.edit_line(item.blob_sha256, track, index, body.text)
     except SubtitleError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return _track_response(track, transcript)
+    return _track_response(track, transcript, files.load(item.blob_sha256, "original"))
 
 
 class QuotaLimit(CamelModel):

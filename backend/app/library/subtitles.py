@@ -7,6 +7,7 @@ video stuck on "running".
 """
 
 import asyncio
+import bisect
 import json
 import logging
 import math
@@ -74,6 +75,16 @@ class Transcript:
     translator: str | None = None
     # Lines changed by hand. A translation made again keeps them as they are.
     edited: frozenset[int] = frozenset()
+    # Starts come from the first spoken word. False for older files, whose starts often sit at
+    # the end of the line before, so they are pulled closer when shown (tighten_starts).
+    word_timing: bool = False
+
+
+@dataclass(frozen=True)
+class ChunkResult:
+    language: str | None
+    lines: list[Line]
+    word_timing: bool
 
 
 def normalize_language(raw: str | None) -> str | None:
@@ -102,6 +113,7 @@ class SubtitleFiles:
             "language": transcript.language,
             "translator": transcript.translator,
             "edited": sorted(transcript.edited),
+            "word_timing": transcript.word_timing,
             "lines": [asdict(x) for x in transcript.lines],
         }
         # Written beside and renamed, so a reader never sees half a file.
@@ -116,7 +128,11 @@ class SubtitleFiles:
         raw = json.loads(path.read_text(encoding="utf-8"))
         lines = [Line(**line) for line in raw["lines"]]
         return Transcript(
-            raw.get("language"), lines, raw.get("translator"), frozenset(raw.get("edited", []))
+            raw.get("language"),
+            lines,
+            raw.get("translator"),
+            frozenset(raw.get("edited", [])),
+            bool(raw.get("word_timing", False)),
         )
 
     def edit_line(self, sha256: str, track: Track, index: int, text: str) -> Transcript:
@@ -247,7 +263,7 @@ async def extract_audio_chunks(
 
 
 class Transcriber(Protocol):
-    async def transcribe(self, audio: Path) -> tuple[str | None, list[Line]]: ...
+    async def transcribe(self, audio: Path) -> ChunkResult: ...
 
 
 # Tried in order when Groq answers 404 for a model: retired, or blocked for the account.
@@ -330,7 +346,7 @@ class GroqTranscriber:
         if self._quota is not None:
             self._quota.record("groq", "transcribe", model, response)
 
-    async def transcribe(self, audio: Path) -> tuple[str | None, list[Line]]:
+    async def transcribe(self, audio: Path) -> ChunkResult:
         if not self._api_key:
             raise SubtitleError("GROQ_API_KEY belum diisi di backend/.env")
 
@@ -342,7 +358,9 @@ class GroqTranscriber:
                     data={
                         "model": model,
                         "response_format": "verbose_json",
-                        "timestamp_granularities[]": "segment",
+                        # Words too: a segment starts where the one before ended, silence
+                        # included, while its first word starts when the speaking does.
+                        "timestamp_granularities[]": ["segment", "word"],
                         "temperature": "0",
                     },
                     files={"file": (audio.name, handle, "audio/ogg")},
@@ -351,7 +369,12 @@ class GroqTranscriber:
 
         response = await _call_groq(send, self._models, "transkrip", self._record)
         body = response.json()
-        return normalize_language(body.get("language")), _speech_lines(body.get("segments"))
+        words = body.get("words") or []
+        return ChunkResult(
+            normalize_language(body.get("language")),
+            _speech_lines(body.get("segments"), words),
+            bool(words),
+        )
 
 
 def _retry_after(response: httpx.Response, default: float) -> float:
@@ -361,14 +384,43 @@ def _retry_after(response: httpx.Response, default: float) -> float:
         return default
 
 
-def _speech_lines(segments: Any) -> list[Line]:
+def _speech_lines(segments: Any, words: Any = ()) -> list[Line]:
+    word_starts = sorted(float(word["start"]) for word in words or [] if "start" in word)
     lines: list[Line] = []
     for segment in segments or []:
         text = str(segment.get("text", "")).strip()
         if not text or float(segment.get("no_speech_prob", 0)) > NO_SPEECH_THRESHOLD:
             continue
-        lines.append(Line(float(segment["start"]), float(segment["end"]), text))
+        start, end = float(segment["start"]), float(segment["end"])
+        lines.append(Line(_first_word_start(word_starts, start, end), end, text))
     return lines
+
+
+def _first_word_start(word_starts: list[float], start: float, end: float) -> float:
+    # Word times can sit a hair before the segment's own start, hence the small slack.
+    index = bisect.bisect_left(word_starts, start - 0.05)
+    if index < len(word_starts) and word_starts[index] < end:
+        return max(word_starts[index], start)
+    return start
+
+
+# Fallback for older files without word times: a line is shown for at most about as long as it
+# takes to say, counted back from its end. Slow speech runs near 10 characters a second, and only
+# lines that would show clearly too early are moved, so normal narration keeps its timing.
+CHARS_PER_SECOND = 10.0
+LINE_PADDING_SECONDS = 1.0
+MIN_LINE_SECONDS = 1.2
+MIN_SHIFT_SECONDS = 1.5
+
+
+def tighten_starts(lines: list[Line]) -> list[float]:
+    """Starts moved later where a line would show far longer than it takes to say it."""
+    starts: list[float] = []
+    for line in lines:
+        longest = max(len(line.text) / CHARS_PER_SECOND + LINE_PADDING_SECONDS, MIN_LINE_SECONDS)
+        tightened = line.end - longest
+        starts.append(tightened if tightened - line.start >= MIN_SHIFT_SECONDS else line.start)
+    return starts
 
 
 ProgressCallback = Callable[[int], None]
@@ -391,6 +443,7 @@ async def transcribe_video(
     offsets = await _audio_plan(source, chunk_seconds)
     lines: list[Line] = []
     languages: list[str] = []
+    word_timing = True
 
     def report(done: float) -> None:
         # Capped below 100: the file is still to be written.
@@ -401,15 +454,16 @@ async def transcribe_video(
             path = Path(tmp) / f"chunk-{index:03d}.ogg"
             await _extract_chunk(source, path, offset, chunk_seconds)
             report(index + EXTRACT_SHARE)
-            language, chunk_lines = await transcriber.transcribe(path)
+            chunk = await transcriber.transcribe(path)
             path.unlink(missing_ok=True)
-            if language and chunk_lines:
-                languages.append(language)
-            lines.extend(Line(x.start + offset, x.end + offset, x.text) for x in chunk_lines)
+            if chunk.language and chunk.lines:
+                languages.append(chunk.language)
+            word_timing = word_timing and chunk.word_timing
+            lines.extend(Line(x.start + offset, x.end + offset, x.text) for x in chunk.lines)
             report(index + 1)
     # The language heard most across the pieces, not the first piece, which may be an intro song.
     language = max(set(languages), key=languages.count) if languages else None
-    return Transcript(language, lines)
+    return Transcript(language, lines, word_timing=word_timing)
 
 
 # Translation

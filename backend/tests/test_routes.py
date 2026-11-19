@@ -617,7 +617,7 @@ async def test_subtitles_generate_once_then_translate_and_serve_lines(
     generated = await client.post(base)
     generated_again = await client.post(base)
     sha = app.state.queue.jobs[-1]
-    files.save(sha, "original", Transcript("id", [Line(0.0, 1.5, "halo semua")]))
+    files.save(sha, "original", Transcript("id", [Line(0.0, 1.5, "halo semua")], word_timing=True))
     translation = await client.post(f"{base}/en")
     lines = await client.get(f"{base}/original")
     missing = await client.get(f"{base}/id")
@@ -760,3 +760,40 @@ async def test_claude_redo_is_refused_once_the_monthly_budget_is_used(
     assert refused.status_code == 409
     assert "CLAUDE_MONTHLY_BUDGET_USD" in refused.json()["detail"]
     assert info.json()["claudeBudgetReached"] is True
+
+
+async def test_old_subtitle_files_are_served_with_tightened_starts(
+    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    # Arrange
+    from app.library.subtitles import Line, SubtitleFiles, SubtitleStatus, Transcript
+    from tests.test_subtitles import make_video
+
+    await login(client)
+    files = SubtitleFiles(tmp_path / "subs")
+    app.state.subtitle_files = files
+    app.state.subtitle_status = SubtitleStatus(fakeredis.FakeRedis())
+    folder_id = await _create_folder(client, session_factory)
+    url = f"/api/folders/{folder_id}/files"
+    ids = []
+    for name, seconds in (("old.mp4", 2), ("new.mp4", 3)):
+        video = make_video(tmp_path / name, seconds=seconds).read_bytes()
+        upload = await client.post(url, files={"file": (name, video, "video/mp4")})
+        ids.append(upload.json()["item"]["id"])
+    for item_id in ids:
+        await client.post(f"/api/items/{item_id}/subtitles")
+    old_sha, new_sha = app.state.queue.jobs[-2], app.state.queue.jobs[-1]
+    late = [Line(0.0, 8.0, "Hi.")]
+    files.save(old_sha, "original", Transcript("en", late))
+    files.save(old_sha, "id", Transcript("id", [Line(0.0, 8.0, "Halo, apa kabar semuanya?")]))
+    files.save(new_sha, "original", Transcript("en", late, word_timing=True))
+
+    # Act
+    old_original = await client.get(f"/api/items/{ids[0]}/subtitles/original")
+    old_translation = await client.get(f"/api/items/{ids[0]}/subtitles/id")
+    new_original = await client.get(f"/api/items/{ids[1]}/subtitles/original")
+
+    # Assert
+    assert old_original.json()["lines"][0]["start"] == 6.7
+    assert old_translation.json()["lines"][0]["start"] == 6.7
+    assert new_original.json()["lines"][0]["start"] == 0.0

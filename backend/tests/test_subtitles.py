@@ -10,6 +10,7 @@ import respx
 from app.library import subtitles
 from app.library.subtitles import (
     BatchMismatch,
+    ChunkResult,
     ClaudeTranslator,
     GroqTranscriber,
     GroqTranslator,
@@ -48,9 +49,9 @@ class FakeTranscriber:
         self.language = language
         self.calls: list[Path] = []
 
-    async def transcribe(self, audio: Path) -> tuple[str | None, list[Line]]:
+    async def transcribe(self, audio: Path) -> ChunkResult:
         self.calls.append(audio)
-        return self.language, [Line(0.5, 1.5, f"halo {len(self.calls)}")]
+        return ChunkResult(self.language, [Line(0.5, 1.5, f"halo {len(self.calls)}")], True)
 
 
 class FakeTranslator:
@@ -184,7 +185,8 @@ async def test_groq_drops_non_speech_and_retries_after_rate_limit(tmp_path: Path
         )
 
         # Act
-        language, lines = await groq.transcribe(audio)
+        result = await groq.transcribe(audio)
+        language, lines = result.language, result.lines
 
     # Assert
     assert route.call_count == 2
@@ -208,7 +210,7 @@ async def test_retired_groq_model_falls_back_and_names_the_step_when_none_work(
         translator = GroqTranslator(client, "gsk", "llama-old", "https://groq.test/openai/v1")
 
         # Act
-        language, _ = await groq.transcribe(audio)
+        language = (await groq.transcribe(audio)).language
         with pytest.raises(SubtitleError) as failure:
             await translator.translate(["hi"], "id")
 
@@ -492,3 +494,50 @@ async def test_groq_broken_json_or_oversized_batch_is_retried_in_smaller_groups(
     sent = json.loads(respx.calls[0].request.content)
     assert sent["reasoning_effort"] == "low"
     assert sent["max_completion_tokens"] == subtitles.MAX_TRANSLATION_TOKENS
+
+
+@respx.mock
+async def test_line_starts_at_its_first_spoken_word_not_after_the_silence(tmp_path: Path) -> None:
+    # Arrange
+    audio = tmp_path / "a.ogg"
+    audio.write_bytes(b"x")
+    body = {
+        "language": "en",
+        "segments": [
+            {"start": 0.0, "end": 2.0, "text": "Hi.", "no_speech_prob": 0.0},
+            {"start": 2.0, "end": 9.0, "text": "Where were you?", "no_speech_prob": 0.0},
+        ],
+        "words": [
+            {"word": "Hi", "start": 0.4, "end": 0.9},
+            {"word": "Where", "start": 7.1, "end": 7.4},
+            {"word": "were", "start": 7.4, "end": 7.6},
+            {"word": "you", "start": 7.6, "end": 8.8},
+        ],
+    }
+    route = respx.post(GROQ_URL).mock(return_value=httpx.Response(200, json=body))
+    async with httpx.AsyncClient() as client:
+        groq = GroqTranscriber(client, "gsk", "whisper-large-v3", "https://groq.test/openai/v1")
+
+        # Act
+        result = await groq.transcribe(audio)
+
+    # Assert
+    assert [(line.start, line.end) for line in result.lines] == [(0.4, 2.0), (7.1, 9.0)]
+    assert result.word_timing is True
+    sent = route.calls[0].request.content.decode(errors="ignore")
+    assert sent.count('name="timestamp_granularities[]"') == 2
+
+
+def test_old_starts_are_pulled_in_to_about_the_time_it_takes_to_say_the_line() -> None:
+    # Arrange
+    lines = [
+        Line(10.0, 18.0, "Hi."),  # 8 s for 3 characters: shown far too early
+        Line(18.0, 22.0, "This line is about right."),  # slow narration, left alone
+        Line(22.0, 23.0, "Ok"),
+    ]
+
+    # Act
+    starts = subtitles.tighten_starts(lines)
+
+    # Assert
+    assert starts == [16.7, 18.0, 22.0]
